@@ -9,34 +9,40 @@ permissions:
   contents: write
 
 jobs:
-  diag:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Diagnose archive
+
+      - name: Unpack sources
+        if: hashFiles('youcode-src.tar.gz.b64') != ''
         run: |
-          set +e
-          {
-            echo "== ls =="
-            ls -la
-            echo "== decode =="
-            base64 -d youcode-src.tar.gz.b64 > src.tar.gz
-            echo "b64 rc=$?"
-            ls -l src.tar.gz
-            echo "== gzip test =="
-            gzip -t src.tar.gz
-            echo "gzip rc=$?"
-            echo "== tar list =="
-            tar tzf src.tar.gz | head -n 30
-            echo "tar rc=$?"
-            echo "== head bytes =="
-            head -c 32 src.tar.gz | od -An -tx1
-            echo "== sha256 =="
-            sha256sum src.tar.gz
-          } > diag.txt 2>&1
-          cat diag.txt
-          git config user.name "diag-bot"
-          git config user.email "diag@example.com"
-          git add diag.txt
-          git commit -m "diag" || true
-          git push || true
+          base64 -d youcode-src.tar.gz.b64 > src.tar.gz
+          gzip -t src.tar.gz
+          tar xzf src.tar.gz
+          rm -f src.tar.gz
+          ls -la
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Get Gradle 8.9
+        run: |
+          curl -sSLo gradle.zip https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          unzip -q gradle.zip
+
+      - name: Build debug APK
+        run: ./gradle-8.9/bin/gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: YouCode-APK
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
