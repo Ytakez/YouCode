@@ -1,5 +1,8 @@
 package com.opencode.ai.ui.screens
 
+import com.opencode.ai.ui.theme.aurora
+import com.opencode.ai.ui.theme.entrance
+import com.opencode.ai.ui.theme.pressScale
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
@@ -37,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -45,29 +49,34 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
+import android.content.Intent
+import android.net.Uri
+import kotlinx.coroutines.delay
+import org.json.JSONObject
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.opencode.ai.data.ProviderItem
 import com.opencode.ai.data.SampleData
+import com.opencode.ai.viewmodel.ChatViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProvidersScreen(
     onBack: () -> Unit,
-    onLocalModelsClick: () -> Unit = {},
-    onSettingsClick: () -> Unit = {}
+    onSettingsClick: () -> Unit = {},
+    viewModel: ChatViewModel? = null
 ) {
     var search by remember { mutableStateOf("") }
+    var catalogMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(viewModel) { viewModel?.refreshOpenCodeModels() }
     val context = LocalContext.current
-    val uriHandler = LocalUriHandler.current
     val prefs = remember { context.getSharedPreferences("providers", android.content.Context.MODE_PRIVATE) }
     // id -> saved key (blank = not connected)
     val savedKeys = remember {
         mutableStateMapOf<String, String>().apply {
             SampleData.providers.forEach { put(it.id, prefs.getString("key_${it.id}", "") ?: "") }
-            SampleData.providers.filter { it.id in setOf("custom-cloud", "openrouter-free", "opencode-go", "opencode-zen", "claude", "opencode-server") }.forEach { provider ->
+            SampleData.providers.filter { it.id in setOf("custom-cloud", "pollinations", "opencode-go", "opencode-zen", "claude", "opencode-server") }.forEach { provider ->
                 val hasBase = prefs.getString("base_${provider.id}", "").orEmpty().isNotBlank()
                 val configured = if (provider.id == "opencode-server") hasBase else
                     hasBase && prefs.getString("model_${provider.id}", "").orEmpty().isNotBlank() &&
@@ -76,14 +85,40 @@ fun ProvidersScreen(
             }
         }
     }
+    viewModel?.openCodeProviders?.forEach { provider ->
+        if (provider.id !in savedKeys) savedKeys[provider.id] = ""
+    }
     var dialogItem by remember { mutableStateOf<ProviderItem?>(null) }
+    var oauthAttempt by remember { mutableStateOf<Pair<String, JSONObject>?>(null) }
+    var oauthCode by remember { mutableStateOf("") }
+    var oauthStatus by remember { mutableStateOf("pending") }
+    var oauthMessage by remember { mutableStateOf<String?>(null) }
 
-    val filtered = if (search.isBlank()) SampleData.providers
-    else SampleData.providers.filter {
-        it.name.contains(search, true) || it.description.contains(search, true)
+    LaunchedEffect(oauthAttempt) {
+        val active = oauthAttempt ?: return@LaunchedEffect
+        val (providerId, attempt) = active
+        if (attempt.optString("mode") == "code") return@LaunchedEffect
+        val attemptId = attempt.optString("attemptID")
+        if (attemptId.isBlank()) return@LaunchedEffect
+        while (true) {
+            oauthStatus = "pending"
+            viewModel?.checkOpenCodeOAuth(providerId, attemptId) { oauthStatus = it }
+            delay(1500)
+            when (oauthStatus) {
+                "complete" -> { savedKeys[providerId] = "connected"; oauthAttempt = null; oauthMessage = "Вход выполнен"; viewModel?.refreshOpenCodeModels(); return@LaunchedEffect }
+                "failed", "expired" -> { oauthAttempt = null; oauthMessage = "Вход не выполнен: $oauthStatus"; return@LaunchedEffect }
+            }
+        }
     }
 
-    val featured = filtered.filter { it.category == "opencode" || it.category == "local" || it.category == "opencode-server" }
+    val allProviders = SampleData.providers + (viewModel?.openCodeProviders ?: emptyList())
+    val filtered = if (search.isBlank()) allProviders
+    else allProviders.filter {
+        it.name.contains(search, true) || it.description.contains(search, true) || it.id.contains(search, true)
+    }
+
+    val featured = filtered.filter { it.category == "opencode" || it.category == "opencode-server" }
+    val liveProviders = filtered.filter { it.category == "opencode-live" }
     val keyProviders = filtered.filter { it.category == "key" }
 
     Scaffold(
@@ -114,40 +149,6 @@ fun ProvidersScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
-            // Built-in setup guide for the OpenRouter free-model connection.
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 18.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "Как подключить 12 бесплатных моделей",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "1. Нажми «Получить API-ключ» и открой сайт OpenRouter.\n" +
-                            "2. Войди или зарегистрируйся и создай ключ в разделе API Keys.\n" +
-                            "3. Скопируй ключ. Не отправляй его другим людям.\n" +
-                            "4. Вернись сюда, найди «OpenRouter — 12 бесплатных моделей» в списке провайдеров, открой его, вставь ключ и нажми «Сохранить».\n" +
-                            "5. Открой выбор моделей, выбери модель с пометкой Free и отправь сообщение в чате.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { uriHandler.openUri("https://openrouter.ai/settings/keys") }) {
-                        Text("Получить API-ключ OpenRouter")
-                    }
-                    Text(
-                        "Важно: бесплатные модели имеют лимиты и могут временно становиться недоступными. Для работы нужен интернет и действующий ключ.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
             Text(
                 "opencode",
                 style = MaterialTheme.typography.labelLarge,
@@ -157,24 +158,31 @@ fun ProvidersScreen(
             )
 
             featured.forEachIndexed { index, item ->
-                AnimatedVisibility(
-                    visible = true,
-                    enter = fadeIn(tween(360, delayMillis = index * 55)) +
-                        slideInVertically(tween(420, delayMillis = index * 55)) { it / 8 }
-                ) {
                 ProviderCard(
                     item = item,
                     connected = !savedKeys[item.id].isNullOrBlank(),
-                    onClick = {
-                        if (item.id == "local") {
-                            onLocalModelsClick()
-                        } else {
-                            dialogItem = item
-                        }
-                    }
+                    onClick = { dialogItem = item },
+                    modifier = Modifier.entrance(index)
                 )
-                }
                 Spacer(Modifier.height(10.dp))
+            }
+
+            if (liveProviders.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text("Провайдеры Margy / OpenCode", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                Text("Загружено с подключённого OpenCode Server. Нажми на провайдера, чтобы добавить API-ключ.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp))
+                liveProviders.forEachIndexed { index, item ->
+                    ProviderCard(item, !savedKeys[item.id].isNullOrBlank(), onClick = { dialogItem = item },
+                        modifier = Modifier.entrance(index))
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+            viewModel?.openCodeCatalogError?.let { error ->
+                Text("Каталог OpenCode: $error", color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 8.dp))
             }
 
             Spacer(Modifier.height(16.dp))
@@ -221,6 +229,9 @@ fun ProvidersScreen(
                 }
             }
 
+            catalogMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall,
+                color = if (it.startsWith("Ключ")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(vertical = 8.dp)) }
             Spacer(Modifier.height(32.dp))
         }
     }
@@ -229,16 +240,16 @@ fun ProvidersScreen(
         KeyDialog(
             item = item,
             currentKey = prefs.getString("key_${item.id}", "") ?: "",
-            custom = item.category == "key" || item.id in setOf("openrouter-free", "opencode-go", "opencode-zen", "claude", "opencode-server"),
+            custom = item.category == "key" || item.id in setOf("pollinations", "opencode-go", "opencode-zen", "claude", "opencode-server"),
             currentUrl = prefs.getString("base_${item.id}", when (item.id) {
                 "opencode-go" -> "https://opencode.ai/zen/go/v1"
                 "opencode-zen" -> "https://opencode.ai/zen/v1"
                 "claude" -> "https://api.anthropic.com/v1"
                 "opencode-server" -> ""
-                "openrouter-free" -> "https://openrouter.ai/api/v1"
+                "pollinations" -> "https://gen.pollinations.ai/v1"
                 else -> ""
             }) ?: "",
-            currentModel = prefs.getString("model_${item.id}", when (item.id) { "opencode-server" -> "server-default"; "openrouter-free" -> "selected-model"; else -> "" }) ?: "",
+            currentModel = prefs.getString("model_${item.id}", if (item.id == "opencode-server") "server-default" else if (item.id == "pollinations") "openai" else "") ?: "",
             currentProtocol = prefs.getString("protocol_${item.id}", if (item.id == "claude") "anthropic" else "openai") ?: "openai",
             onSaveCustom = { url, key, model, protocol ->
                 prefs.edit().putString("base_${item.id}", url)
@@ -248,13 +259,66 @@ fun ProvidersScreen(
                     .putString("active_provider", item.id).apply()
                 savedKeys[item.id] = if (url.isNotBlank() && (item.id == "opencode-server" || (model.isNotBlank() && key.isNotBlank()))) "configured" else ""
                 dialogItem = null
+                if (item.id == "opencode-server") viewModel?.refreshOpenCodeModels()
             },
             onSave = { key ->
-                savedKeys[item.id] = key
-                prefs.edit().putString("key_${item.id}", key).apply()
+                if (item.category == "opencode-live") {
+                    viewModel?.connectOpenCodeProvider(item.id, key) { error ->
+                        catalogMessage = error ?: "Ключ провайдера сохранён в OpenCode"
+                        if (error == null) savedKeys[item.id] = "connected"
+                    }
+                } else {
+                    savedKeys[item.id] = key
+                    prefs.edit().putString("key_${item.id}", key).apply()
+                }
                 dialogItem = null
             },
+            oauthMethods = viewModel?.openCodeOAuthMethods?.get(item.id).orEmpty(),
+            onOAuth = { methodId ->
+                viewModel?.startOpenCodeOAuth(item.id, methodId) { response, error ->
+                    if (error != null) oauthMessage = error
+                    else if (response != null) {
+                        oauthAttempt = item.id to response
+                        oauthCode = ""
+                        oauthStatus = "pending"
+                        response.optString("url").takeIf { it.startsWith("http") }?.let { url ->
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                        }
+                    }
+                }
+            },
             onDismiss = { dialogItem = null }
+        )
+    }
+
+    oauthMessage?.let { message ->
+        AlertDialog(onDismissRequest = { oauthMessage = null }, title = { Text("OpenCode OAuth") },
+            text = { Text(message) }, confirmButton = { TextButton(onClick = { oauthMessage = null }) { Text("OK") } })
+    }
+    oauthAttempt?.let { (providerId, attempt) ->
+        AlertDialog(onDismissRequest = { oauthAttempt = null },
+            title = { Text("Вход через браузер") },
+            text = {
+                Column {
+                    val instructions = attempt.optString("instructions")
+                    if (instructions.isNotBlank()) Text(instructions, style = MaterialTheme.typography.bodyMedium)
+                    val url = attempt.optString("url")
+                    if (url.isNotBlank()) TextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }) { Text("Открыть страницу входа") }
+                    if (attempt.optString("mode") == "code") {
+                        OutlinedTextField(value = oauthCode, onValueChange = { oauthCode = it }, label = { Text("Код со страницы") }, singleLine = true)
+                    } else Text("Ожидаю завершения авторизации…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = {
+                if (attempt.optString("mode") == "code") TextButton(onClick = {
+                    viewModel?.completeOpenCodeOAuth(providerId, attempt.optString("attemptID"), oauthCode) { error ->
+                        oauthAttempt = null
+                        if (error == null) savedKeys[providerId] = "connected"
+                        oauthMessage = error ?: "Вход выполнен"
+                    }
+                }, enabled = oauthCode.isNotBlank()) { Text("Подтвердить") }
+            },
+            dismissButton = { TextButton(onClick = { oauthAttempt = null }) { Text("Отмена") } }
         )
     }
 }
@@ -269,6 +333,8 @@ private fun KeyDialog(
     currentProtocol: String = "openai",
     onSaveCustom: (String, String, String, String) -> Unit = { _, _, _, _ -> },
     onSave: (String) -> Unit,
+    oauthMethods: List<Pair<String, String>> = emptyList(),
+    onOAuth: (String) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     var text by remember { mutableStateOf(currentKey) }
@@ -282,8 +348,9 @@ private fun KeyDialog(
         text = {
             Column {
                 Text(
-                    if (item.id == "opencode-server") "Укажи адрес запущенного OpenCode Server (например, http://192.168.1.10:4096). Пароль — необязательно, если сервер защищён паролем."
-                    else if (item.id == "openrouter-free") "Один API-ключ OpenRouter подключает все 12 бесплатных моделей из списка. Модель выбирается в разделе выбора моделей. Бесплатные варианты ограничены по числу запросов; провайдеры могут быть временно недоступны."
+                    if (item.id == "opencode-server") "Укажи адрес запущенного OpenCode Server (например, http://192.168.1.10:4096). Пароль — необязательно, если сервер защищён паролем. Бесплатные модели должны быть настроены в самом OpenCode Server; прямой API-доступ к бесплатному тарифу OpenCode запрещён."
+                    else if (item.category == "opencode-live") "Ключ будет передан подключённому OpenCode Server и сохранён там для этого провайдера. Сам ключ не сохраняется в настройках YouCode."
+                    else if (item.id == "pollinations") "Вставь секретный API-ключ Pollinations (sk_...). Base URL уже заполнен. Модель выбирается автоматически из 12 вариантов в списке YouCode. Запросы используют Pollen-кредиты аккаунта."
                     else if (custom) "Укажи Base URL, точный ID модели и API-ключ провайдера. OpenCode Go/Zen используют API-ключ из консоли OpenCode; Claude — ключ Anthropic API."
                     else if (isClaude) "Вставь токен Claude Code (Pro или Max)."
                     else "Вставь API-ключ провайдера.",
@@ -296,8 +363,8 @@ private fun KeyDialog(
                         label = { Text(if (item.id == "opencode-server") "Адрес OpenCode Server" else "Домен / Base URL") }, placeholder = { Text(if (item.id == "opencode-server") "http://192.168.1.10:4096" else "https://api.example.com/v1") }, singleLine = true)
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(value = model, onValueChange = { model = it }, modifier = Modifier.fillMaxWidth(),
-                        label = { Text(if (item.id == "opencode-server") "Модель (не используется — выбери на сервере)" else if (item.id == "openrouter-free") "Модель выбирается в списке YouCode" else "Модель") }, placeholder = { Text(if (item.id == "opencode-server") "server-default" else if (item.id == "openrouter-free") "selected-model" else "точный ID модели из каталога провайдера") }, singleLine = true, readOnly = item.id == "openrouter-free")
-                    if (item.id != "opencode-server" && item.id != "openrouter-free") {
+                        label = { Text(if (item.id == "opencode-server") "Модель (не используется — выбери на сервере)" else if (item.id == "pollinations") "Модель (автовыбор из списка)" else "Модель") }, placeholder = { Text(if (item.id == "opencode-server") "server-default" else "точный ID модели из каталога провайдера") }, singleLine = true)
+                    if (item.id != "opencode-server") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             TextButton(onClick = { protocol = "openai" }) { Text(if (protocol == "openai") "✓ OpenAI API" else "OpenAI API") }
                             TextButton(onClick = { protocol = "anthropic" }) { Text(if (protocol == "anthropic") "✓ Claude API" else "Claude API") }
@@ -309,10 +376,17 @@ private fun KeyDialog(
                     value = text,
                     onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text(if (item.id == "opencode-server") "Пароль OpenCode Server" else if (isClaude) "Токен" else "API-ключ (если нужен)") },
+                    placeholder = { Text(if (item.id == "opencode-server") "Пароль OpenCode Server" else if (isClaude) "Токен" else if (item.id == "pollinations") "Pollinations API key (sk_...)" else "API-ключ провайдера") },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true
                 )
+                if (oauthMethods.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Вход через аккаунт", style = MaterialTheme.typography.labelLarge)
+                    oauthMethods.forEach { (methodId, label) ->
+                        TextButton(onClick = { onOAuth(methodId) }, modifier = Modifier.fillMaxWidth()) { Text(label) }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -336,12 +410,12 @@ private fun KeyDialog(
 }
 
 @Composable
-private fun ProviderCard(item: ProviderItem, connected: Boolean, onClick: () -> Unit) {
+private fun ProviderCard(item: ProviderItem, connected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(26.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth().pressScale(0.97f)
     ) {
         Row(
             modifier = Modifier.padding(16.dp),

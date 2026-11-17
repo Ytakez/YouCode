@@ -49,7 +49,12 @@ private val LightColorScheme = lightColorScheme(
     surfaceVariant = Color(0xFFE1E4D9),
     onSurfaceVariant = Color(0xFF44483F),
     outline = Color(0xFF74796D),
-    outlineVariant = Color(0xFFC4C8BC)
+    outlineVariant = Color(0xFFC4C8BC),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF2F5EC),
+    surfaceContainer = Color(0xFFECEFE6),
+    surfaceContainerHigh = Color(0xFFE6E9E0),
+    surfaceContainerHighest = Color(0xFFE1E4DB)
 )
 
 private val DarkColorScheme = darkColorScheme(
@@ -72,15 +77,20 @@ private val DarkColorScheme = darkColorScheme(
     surfaceVariant = Color(0xFF42483D),
     onSurfaceVariant = Color(0xFFC2C8B9),
     outline = Color(0xFF8C9283),
-    outlineVariant = Color(0xFF42483D)
+    outlineVariant = Color(0xFF42483D),
+    surfaceContainerLowest = Color(0xFF0B0F0A),
+    surfaceContainerLow = Color(0xFF191D17),
+    surfaceContainer = Color(0xFF1D211B),
+    surfaceContainerHigh = Color(0xFF272B25),
+    surfaceContainerHighest = Color(0xFF32362F)
 )
 
 private val YouCodeShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(14.dp),
-    medium = RoundedCornerShape(22.dp),
-    large = RoundedCornerShape(28.dp),
-    extraLarge = RoundedCornerShape(36.dp)
+    extraSmall = RoundedCornerShape(12.dp),
+    small = RoundedCornerShape(18.dp),
+    medium = RoundedCornerShape(28.dp),
+    large = RoundedCornerShape(36.dp),
+    extraLarge = RoundedCornerShape(48.dp)
 )
 
 @Composable
@@ -130,6 +140,8 @@ fun YouCodeTheme(
         surfaceContainer = animateColorAsState(colorScheme.surfaceContainer, tween(420)).value,
         surfaceContainerLow = animateColorAsState(colorScheme.surfaceContainerLow, tween(420)).value,
         surfaceContainerHigh = animateColorAsState(colorScheme.surfaceContainerHigh, tween(420)).value,
+        surfaceContainerHighest = animateColorAsState(colorScheme.surfaceContainerHighest, tween(420)).value,
+        surfaceContainerLowest = animateColorAsState(colorScheme.surfaceContainerLowest, tween(420)).value,
         outline = animateColorAsState(colorScheme.outline, tween(420)).value,
         outlineVariant = animateColorAsState(colorScheme.outlineVariant, tween(420)).value
     )

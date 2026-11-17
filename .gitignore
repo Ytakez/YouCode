@@ -11,3 +11,6 @@
 *.apk
 *.ap_
 *.aab
+
+# opencode engine is built by CI, not stored in git
+/app/src/main/jniLibs/

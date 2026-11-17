@@ -3,6 +3,7 @@ package com.opencode.ai.viewmodel
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import android.app.Application
@@ -13,6 +14,9 @@ import com.opencode.ai.data.AttachedFile
 import com.opencode.ai.data.ChatMessage
 import com.opencode.ai.data.ChatSession
 import com.opencode.ai.data.SampleData
+import com.opencode.ai.engine.Engine
+import com.opencode.ai.engine.EngineService
+import com.opencode.ai.data.SmartMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -27,6 +31,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val providerPrefs = application.getSharedPreferences("providers", android.content.Context.MODE_PRIVATE)
 
+    // Stable UI model IDs are routed to real Pollinations catalog aliases.
+    // These aliases are supplied by Pollinations; the live catalog may change.
+    private val pollinationsModels = mapOf(
+        "hy4-flash-free" to "gemini-3.5-flash",
+        "iceman-free" to "mistral-4",
+        "big-pickle" to "grok",
+        "longcat-2.5-free" to "claude-fast",
+        "flint-40b-free" to "llama",
+        "nemotron-3-ultra-free" to "kimi",
+        "deepseek-v4.1-flash-free" to "deepseek",
+        "nemotron-3.5-super-vl-free" to "gemini",
+        "beam-free" to "perplexity-fast",
+        "mimo-v2.6-flash-free" to "minimax",
+        "glm-5.3-flash-free" to "glm",
+        "nemotron-3.5-lightning-free" to "qwen-coder"
+    )
+
     var currentModel by mutableStateOf(SampleData.freeModels.first())
         private set
 
@@ -34,6 +55,245 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     private val modeModelIndex = mutableMapOf<String, Int>()
+    private val openCodeModels = mutableStateListOf<AiModel>()
+    val openCodeProviders = mutableStateListOf<com.opencode.ai.data.ProviderItem>()
+    val openCodeOAuthMethods = mutableStateMapOf<String, List<Pair<String, String>>>()
+    var openCodeCatalogError by mutableStateOf<String?>(null)
+        private set
+
+    // ---- Встроенный opencode (из MargyCode): бесплатные модели без ключей и без компьютера ----
+    private val engine = Engine(application)
+
+    /** "", "starting", "ready", "error", "missing" (нет libopencode.so), "external" (свой сервер). */
+    var engineState by mutableStateOf("")
+        private set
+    var engineError by mutableStateOf<String?>(null)
+        private set
+
+    init {
+        startEmbeddedEngine()
+    }
+
+    private fun startEmbeddedEngine() {
+        if (!engine.available) { engineState = "missing"; return }
+        val saved = providerPrefs.getString("base_opencode-server", "").orEmpty()
+        // Если пользователь подключил свой внешний сервер, его не трогаем.
+        if (saved.isNotBlank() && !saved.contains("127.0.0.1")) { engineState = "external"; return }
+        engineState = "starting"
+        viewModelScope.launch {
+            runCatching { engine.start() }
+                .onSuccess {
+                    providerPrefs.edit()
+                        .putString("base_opencode-server", "http://127.0.0.1:${engine.port}")
+                        .putString("key_opencode-server", engine.password)
+                        .putString("active_provider", "opencode-server")
+                        .apply()
+                    engineState = "ready"
+                    engineError = null
+                    refreshOpenCodeModels()
+                }
+                .onFailure {
+                    engineState = "error"
+                    engineError = it.message
+                }
+        }
+    }
+
+    override fun onCleared() {
+        engine.stop()
+        super.onCleared()
+    }
+
+    /** Loads the same live model catalogue that MargyCode reads from OpenCode's /api/model. */
+    fun refreshOpenCodeModels() {
+        val endpoint = providerPrefs.getString("base_opencode-server", "").orEmpty().trim()
+        val password = providerPrefs.getString("key_opencode-server", "").orEmpty().trim()
+        if (endpoint.isBlank()) return
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val root = endpoint.trimEnd('/')
+                    require(root.startsWith("https://") || root.startsWith("http://")) {
+                        "Адрес OpenCode Server должен начинаться с http:// или https://"
+                    }
+                    val connection = (URL("$root/api/model").openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        connectTimeout = 12000
+                        readTimeout = 30000
+                        setRequestProperty("Accept", "application/json")
+                        if (password.isNotBlank()) {
+                            val raw = "opencode:$password"
+                            val encoded = Base64.encodeToString(raw.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                            setRequestProperty("Authorization", "Basic $encoded")
+                        }
+                    }
+                    try {
+                        val status = connection.responseCode
+                        val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                        val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                        require(status in 200..299) { "OpenCode Server HTTP $status: ${body.take(250)}" }
+                        val integrationConnection = (URL("$root/api/integration").openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"; connectTimeout = 12000; readTimeout = 30000
+                        setRequestProperty("Accept", "application/json")
+                        if (password.isNotBlank()) {
+                            val encoded = Base64.encodeToString("opencode:$password".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                            setRequestProperty("Authorization", "Basic $encoded")
+                        }
+                    }
+                    val providerRows = try {
+                        val status = integrationConnection.responseCode
+                        val stream = if (status in 200..299) integrationConnection.inputStream else integrationConnection.errorStream
+                        val raw = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                        require(status in 200..299) { "OpenCode integrations HTTP $status: ${raw.take(200)}" }
+                        JSONObject(raw).optJSONArray("data") ?: JSONArray()
+                    } finally { integrationConnection.disconnect() }
+                    val oauthMethods = mutableMapOf<String, List<Pair<String, String>>>()
+                    val providers = buildList {
+                        for (i in 0 until providerRows.length()) {
+                            val item = providerRows.optJSONObject(i) ?: continue
+                            val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
+                            val name = item.optString("name").ifBlank { id }
+                            val methods = item.optJSONArray("methods") ?: JSONArray()
+                            val connections = item.optJSONArray("connections") ?: JSONArray()
+                            val methodNames = buildList {
+                                for (j in 0 until methods.length()) {
+                                    val method = methods.optJSONObject(j) ?: continue
+                                    add(method.optString("label").ifBlank { method.optString("type") })
+                                }
+                            }
+                            oauthMethods[id] = buildList {
+                                for (j in 0 until methods.length()) {
+                                    val method = methods.optJSONObject(j) ?: continue
+                                    if (method.optString("type") == "oauth") {
+                                        val methodId = method.optString("id")
+                                        if (methodId.isNotBlank()) add(methodId to method.optString("label").ifBlank { "Войти" })
+                                    }
+                                }
+                            }
+                            add(com.opencode.ai.data.ProviderItem(id, name,
+                                "${methodNames.distinct().joinToString(" · ").ifBlank { "OpenCode provider" }} · подключений: ${connections.length()}",
+                                "opencode-live", false))
+                        }
+                    }
+                    openCodeProviders.clear(); openCodeProviders.addAll(providers)
+                    openCodeOAuthMethods.clear(); openCodeOAuthMethods.putAll(oauthMethods)
+                    val json = JSONObject(body)
+                        val rows = json.optJSONArray("data") ?: json.optJSONArray("models") ?: JSONArray()
+                        val loaded = buildList {
+                            for (i in 0 until rows.length()) {
+                                val item = rows.optJSONObject(i) ?: continue
+                                val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
+                                val providerId = item.optString("providerID")
+                                    .ifBlank { item.optJSONObject("provider")?.optString("id").orEmpty() }
+                                if (providerId.isBlank()) continue
+                                val providerName = item.optJSONObject("provider")?.optString("name")
+                                    ?.takeIf { it.isNotBlank() } ?: providerId
+                                val limit = item.optJSONObject("limit")
+                                val context = limit?.optLong("context")?.takeIf { it > 0 }?.let {
+                                    if (it >= 1000) "${it / 1000}k" else it.toString()
+                                } ?: "OpenCode"
+                                add(AiModel(
+                                    id = id,
+                                    name = item.optString("name").ifBlank { id },
+                                    contextSize = context,
+                                    isFree = providerId == "opencode" && (id.endsWith("-free") || id == "big-pickle"),
+                                    provider = providerName,
+                                    description = "Провайдер: $providerName",
+                                    remoteProviderId = providerId
+                                ))
+                            }
+                        }.distinctBy { "${it.remoteProviderId}/${it.id}" }
+                        openCodeModels.clear()
+                        openCodeModels.addAll(loaded)
+                    } finally { connection.disconnect() }
+                }
+            }.onFailure {
+                openCodeCatalogError = it.message ?: "Не удалось загрузить каталог OpenCode"
+                // Existing local catalogue remains usable when server is unavailable.
+            }.onSuccess {
+                openCodeCatalogError = null
+                if (currentModel.remoteProviderId == null &&
+                    providerPrefs.getString("active_provider", "") == "opencode-server"
+                ) {
+                    openCodeModels.firstOrNull { it.isFree }?.let { selectModel(it) }
+                }
+            }
+        }
+    }
+
+    /** Stores a provider credential in the connected OpenCode server, as MargyCode does. */
+    fun connectOpenCodeProvider(integrationId: String, apiKey: String, onResult: (String?) -> Unit = {}) {
+        val endpoint = providerPrefs.getString("base_opencode-server", "").orEmpty().trim().trimEnd('/')
+        val password = providerPrefs.getString("key_opencode-server", "").orEmpty().trim()
+        viewModelScope.launch {
+            val error = runCatching { withContext(Dispatchers.IO) {
+                require(endpoint.startsWith("http://") || endpoint.startsWith("https://")) { "Сначала подключи OpenCode Server" }
+                val connection = (URL("$endpoint/api/integration/${java.net.URLEncoder.encode(integrationId, "UTF-8")}/connect/key").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"; connectTimeout = 12000; readTimeout = 30000; doOutput = true
+                    setRequestProperty("Content-Type", "application/json"); setRequestProperty("Accept", "application/json")
+                    if (password.isNotBlank()) {
+                        val encoded = Base64.encodeToString("opencode:$password".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                        setRequestProperty("Authorization", "Basic $encoded")
+                    }
+                }
+                try {
+                    connection.outputStream.use { it.write(JSONObject().put("key", apiKey.trim()).toString().toByteArray(Charsets.UTF_8)) }
+                    val status = connection.responseCode
+                    val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                    val raw = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                    require(status in 200..299) { "HTTP $status: ${raw.take(300)}" }
+                } finally { connection.disconnect() }
+            } }.exceptionOrNull()?.message
+            if (error == null) refreshOpenCodeModels()
+            onResult(error)
+        }
+    }
+
+    /** Starts the same OpenCode OAuth flow used by MargyCode. */
+    fun startOpenCodeOAuth(integrationId: String, methodId: String, onResult: (JSONObject?, String?) -> Unit) {
+        openCodeRequest("POST", "/api/integration/${enc(integrationId)}/connect/oauth", JSONObject().put("methodID", methodId)) { json, error ->
+            onResult(json?.optJSONObject("data") ?: json, error)
+        }
+    }
+
+    fun checkOpenCodeOAuth(integrationId: String, attemptId: String, onResult: (String) -> Unit) {
+        openCodeRequest("GET", "/api/integration/${enc(integrationId)}/connect/oauth/${enc(attemptId)}") { json, error ->
+            onResult(if (error == null) json?.optJSONObject("data")?.optString("status", "pending") ?: "pending" else "pending")
+        }
+    }
+
+    fun completeOpenCodeOAuth(integrationId: String, attemptId: String, code: String, onResult: (String?) -> Unit) {
+        openCodeRequest("POST", "/api/integration/${enc(integrationId)}/connect/oauth/${enc(attemptId)}/complete", JSONObject().put("code", code.trim())) { _, error ->
+            if (error == null) refreshOpenCodeModels()
+            onResult(error)
+        }
+    }
+
+    private fun enc(value: String) = java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
+    private fun openCodeRequest(method: String, path: String, body: JSONObject? = null, onResult: (JSONObject?, String?) -> Unit) {
+        val endpoint = providerPrefs.getString("base_opencode-server", "").orEmpty().trim().trimEnd('/')
+        val password = providerPrefs.getString("key_opencode-server", "").orEmpty().trim()
+        viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) {
+                require(endpoint.startsWith("http://") || endpoint.startsWith("https://")) { "Сначала подключи OpenCode Server" }
+                val c = (URL(endpoint + path).openConnection() as HttpURLConnection).apply {
+                    requestMethod = method; connectTimeout = 12000; readTimeout = 30000
+                    setRequestProperty("Accept", "application/json")
+                    if (password.isNotBlank()) setRequestProperty("Authorization", "Basic " + Base64.encodeToString("opencode:$password".toByteArray(), Base64.NO_WRAP))
+                    if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json") }
+                }
+                try {
+                    if (body != null) c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                    val status = c.responseCode
+                    val raw = (if (status in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                    require(status in 200..299) { "OpenCode HTTP $status: ${raw.take(250)}" }
+                    if (raw.isBlank()) JSONObject() else JSONObject(raw)
+                } finally { c.disconnect() }
+            } }
+            onResult(result.getOrNull(), result.exceptionOrNull()?.message)
+        }
+    }
 
     var messages = mutableStateListOf<ChatMessage>()
         private set
@@ -61,12 +321,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     val filteredModels: List<AiModel>
-        get() = if (searchQuery.isBlank()) {
-            SampleData.freeModels
-        } else {
-            SampleData.freeModels.filter {
+        get() {
+            val all = SampleData.freeModels + openCodeModels
+            return if (searchQuery.isBlank()) all else all.filter {
                 it.name.contains(searchQuery, ignoreCase = true) ||
-                        it.provider.contains(searchQuery, ignoreCase = true)
+                    it.provider.contains(searchQuery, ignoreCase = true) ||
+                    it.id.contains(searchQuery, ignoreCase = true)
             }
         }
 
@@ -74,26 +334,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         searchQuery = query
     }
 
+    fun selectMode(mode: SmartMode) {
+        currentMode = mode
+    }
+
     fun selectModel(model: AiModel) {
         currentModel = model
-    }
-
-    fun selectMode(mode: com.opencode.ai.data.SmartMode) {
-        currentMode = mode
-        modeModelIndex[mode.id] = 0
-        val firstId = mode.preferredModelIds.firstOrNull()
-        if (firstId != null) {
-            SampleData.freeModels.firstOrNull { it.id == firstId }?.let { currentModel = it }
+        when {
+            model.remoteProviderId != null -> providerPrefs.edit().putString("active_provider", "opencode-server").apply()
+            model.provider == "Pollinations" -> providerPrefs.edit().putString("active_provider", "pollinations").apply()
         }
-    }
-
-    fun rotateModelOnLimit() {
-        val mode = currentMode
-        val ids = mode.preferredModelIds
-        if (ids.isEmpty()) return
-        val next = ((modeModelIndex[mode.id] ?: 0) + 1) % ids.size
-        modeModelIndex[mode.id] = next
-        SampleData.freeModels.firstOrNull { it.id == ids[next] }?.let { currentModel = it }
     }
 
     fun addAttachment(file: AttachedFile) {
@@ -150,13 +400,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId
 
         isGenerating = true
+        EngineService.start(getApplication<Application>())
         viewModelScope.launch {
             val providerId = providerPrefs.getString("active_provider", "").orEmpty()
             val endpoint = providerPrefs.getString("base_${providerId}", "").orEmpty().trim()
             val apiKey = providerPrefs.getString("key_${providerId}", "").orEmpty().trim()
-            val configuredModel = providerPrefs.getString("model_${providerId}", "").orEmpty().trim()
-            // OpenRouter uses the model selected in YouCode, so one key serves all twelve entries.
-            val remoteModel = if (providerId == "openrouter-free") currentModel.id else configuredModel
+            val remoteModel = providerPrefs.getString("model_${providerId}", "").orEmpty().trim()
+            val requestModel = if (providerId == "pollinations") pollinationsModels[currentModel.id].orEmpty() else remoteModel
             val protocol = providerPrefs.getString("protocol_${providerId}", "openai").orEmpty()
             val reply = if (providerId == "opencode-server" && endpoint.isNotBlank()) {
                 runCatching {
@@ -170,31 +420,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             append("\nПользователь: ").append(text)
                             attachmentsCopy.forEach { f -> append("\n\n[Файл: ").append(f.name).append("]\n").append(f.contentPreview.take(12000)) }
                         }
-                        callOpenCodeServer(endpoint, apiKey, currentModel.id, fullPrompt)
+                        callOpenCodeServer(endpoint, apiKey, currentModel.id, fullPrompt, currentModel.remoteProviderId)
                     }
                 }.fold(
                     onSuccess = { it to emptyList<AttachedFile>() },
                     onFailure = { "Ошибка OpenCode Server: ${it.message ?: "не удалось выполнить запрос"}. Проверь адрес сервера, пароль и наличие выбранной бесплатной модели в OpenCode." to emptyList() }
                 )
-            } else if (endpoint.isNotBlank() && remoteModel.isNotBlank() && apiKey.isNotBlank()) {
+            } else if (endpoint.isNotBlank() && requestModel.isNotBlank() && apiKey.isNotBlank()) {
                 runCatching {
                     withContext(Dispatchers.IO) {
-                        if (protocol == "anthropic") callAnthropic(endpoint, apiKey, remoteModel, text, attachmentsCopy, currentMode.systemHint)
-                        else callOpenAiCompatible(endpoint, apiKey, remoteModel, text, attachmentsCopy, currentMode.systemHint)
+                        if (protocol == "anthropic") callAnthropic(endpoint, apiKey, requestModel, text, attachmentsCopy, currentMode.systemHint)
+                        else callOpenAiCompatible(endpoint, apiKey, requestModel, text, attachmentsCopy, currentMode.systemHint)
                     }
                 }.fold(
                     onSuccess = { it to emptyList<AttachedFile>() },
-                    onFailure = { "Ошибка облачного ИИ: ${it.message ?: "не удалось выполнить запрос"}. Проверь Base URL, API-ключ, ID модели и доступ к сети." to emptyList() }
+                    onFailure = { "Ошибка облачного ИИ: ${it.message ?: "не удалось выполнить запрос"}. Проверь Base URL, API-ключ, доступность модели и баланс Pollen." to emptyList() }
                 )
             } else {
                 ("ИИ не подключён. Открой «Провайдеры» и подключи OpenCode Server или укажи Base URL, API-ключ и ID модели для другого провайдера. Демонстрационные ответы отключены.") to emptyList()
             }
-            val shownModel = if (providerId == "opencode-server" || providerId == "openrouter-free") currentModel.name else if (remoteModel.isNotBlank()) remoteModel else currentModel.name
+            val shownModel = if (providerId == "pollinations" || providerId == "opencode-server") currentModel.name else if (remoteModel.isNotBlank()) remoteModel else currentModel.name
             messages.add(ChatMessage(
                 id = UUID.randomUUID().toString(), content = reply.first, isUser = false,
                 modelName = shownModel, attachments = reply.second
             ))
             isGenerating = false
+            EngineService.stop(getApplication<Application>())
             saveSession(sessionId)
         }
 
@@ -229,7 +480,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * Direct calls to OpenCode's free-tier inference endpoints from third-party apps
      * are rejected by OpenCode; the official server is the supported bridge.
      */
-    private fun callOpenCodeServer(baseUrl: String, password: String, modelId: String, prompt: String): String {
+    private fun callOpenCodeServer(baseUrl: String, password: String, modelId: String, prompt: String, selectedProviderId: String? = null): String {
         val root = baseUrl.trim().trimEnd('/')
         require(root.startsWith("https://") || root.startsWith("http://")) {
             "Адрес сервера должен начинаться с http:// или https://"
@@ -267,13 +518,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Resolve the providerID from the live server catalog instead of guessing it.
         val catalog = request("api/model")
         val models = catalog.optJSONArray("data") ?: catalog.optJSONArray("models") ?: JSONArray()
-        var providerId: String? = null
-        for (i in 0 until models.length()) {
-            val item = models.optJSONObject(i) ?: continue
-            if (item.optString("id") == modelId) {
-                providerId = item.optString("providerID").takeIf { it.isNotBlank() }
-                    ?: item.optJSONObject("provider")?.optString("id")?.takeIf { it.isNotBlank() }
-                break
+        var providerId: String? = selectedProviderId
+        if (providerId.isNullOrBlank()) {
+            for (i in 0 until models.length()) {
+                val item = models.optJSONObject(i) ?: continue
+                if (item.optString("id") == modelId) {
+                    providerId = item.optString("providerID").takeIf { it.isNotBlank() }
+                        ?: item.optJSONObject("provider")?.optString("id")?.takeIf { it.isNotBlank() }
+                    break
+                }
             }
         }
         require(providerId != null) {

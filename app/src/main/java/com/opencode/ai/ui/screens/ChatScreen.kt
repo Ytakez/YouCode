@@ -6,7 +6,28 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.documentfile.provider.DocumentFile
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.opencode.ai.ui.theme.MorphingOrb
+import com.opencode.ai.ui.theme.aurora
+import com.opencode.ai.ui.theme.entrance
+import com.opencode.ai.ui.theme.pressScale
+import kotlinx.coroutines.launch
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -16,6 +37,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -95,6 +117,17 @@ fun ChatScreen(
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    // id сообщений, которые уже проигрывали анимацию появления (чтобы не повторять при прокрутке)
+    val animatedIds = remember { mutableSetOf<String>() }
+    val topBarElevation by animateDpAsState(
+        targetValue = if (listState.canScrollBackward) 4.dp else 0.dp,
+        animationSpec = spring(stiffness = 400f),
+        label = "topbar_elevation"
+    )
+    val canSend = (inputText.isNotBlank() || viewModel.pendingAttachments.isNotEmpty()) &&
+        !viewModel.isGenerating
 
     val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -189,67 +222,109 @@ fun ChatScreen(
             .navigationBarsPadding()
             .imePadding()
     ) {
-        // Top bar
-        Surface(color = MaterialTheme.colorScheme.background) {
+        // Material You expressive top app bar
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = topBarElevation
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onMenuClick) {
-                    Icon(Icons.Default.Menu, contentDescription = "Меню",
-                        tint = MaterialTheme.colorScheme.onSurface)
+                    Icon(
+                        Icons.Default.Menu,
+                        contentDescription = "Меню",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
                 }
 
-                Spacer(Modifier.weight(1f))
+                Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
+                    Text(
+                        "YouCode",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        when (viewModel.engineState) {
+                            "starting" -> "Запускаю встроенный OpenCode…"
+                            "error" -> "OpenCode не запустился"
+                            else -> "Твой AI-помощник"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (viewModel.engineState == "error") MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
+                val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "dot_pulse")
+                val dotScale by pulse.animateFloat(
+                    initialValue = 1f,
+                    targetValue = if (viewModel.isGenerating) 1.9f else 1f,
+                    animationSpec = infiniteRepeatable(tween(650, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                    label = "dot_scale"
+                )
                 Surface(
                     onClick = onModelClick,
-                    shape = RoundedCornerShape(28.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.pressScale(0.94f),
+                    shape = RoundedCornerShape(22.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
                         MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
                     )
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
+                                .graphicsLayer {
+                                    scaleX = dotScale
+                                    scaleY = dotScale
+                                }
                                 .clip(CircleShape)
                                 .background(MaterialTheme.colorScheme.primary)
                         )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "${viewModel.currentMode.emoji} ${viewModel.currentModel.name}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(Modifier.width(4.dp))
+                        Spacer(Modifier.width(7.dp))
+                        AnimatedContent(
+                            targetState = "${viewModel.currentMode.emoji} ${viewModel.currentModel.name}",
+                            transitionSpec = {
+                                (fadeIn(tween(220)) + slideInVertically(spring(stiffness = 500f)) { it / 2 }) togetherWith
+                                    (fadeOut(tween(120)) + slideOutVertically(spring(stiffness = 500f)) { -it / 2 })
+                            },
+                            label = "model_chip_text"
+                        ) { label ->
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Spacer(Modifier.width(3.dp))
                         Icon(
-                            Icons.Default.ExpandMore, contentDescription = null,
+                            Icons.Default.ExpandMore,
+                            contentDescription = "Выбрать модель",
                             modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
                         )
                     }
                 }
-
-                Spacer(Modifier.weight(1f))
-                Spacer(Modifier.size(48.dp))
             }
         }
 
         // Messages
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth().aurora()) {
             if (viewModel.messages.isEmpty()) {
-                EmptyChatState()
+                EmptyChatState(onSuggestion = { viewModel.sendMessage(it) })
             } else {
                 LazyColumn(
                     state = listState,
@@ -258,15 +333,43 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(viewModel.messages, key = { it.id }) { msg ->
-                        Box(modifier = Modifier.animateItem()) {
-                            MessageBubble(
-                                message = msg,
-                                onSaveFileClick = { file -> createDocumentLauncher.launch(file.name) }
-                            )
-                        }
+                        val isNew = remember(msg.id) { animatedIds.add(msg.id) }
+                        MessageBubble(
+                            message = msg,
+                            modifier = Modifier
+                                .animateItem(fadeInSpec = null)
+                                .entrance(
+                                    enabled = isNew,
+                                    fromX = if (msg.isUser) 40.dp else (-40).dp,
+                                    fromY = 18.dp
+                                ),
+                            onSaveFileClick = { file -> createDocumentLauncher.launch(file.name) }
+                        )
                     }
                     if (viewModel.isGenerating) {
-                        item { TypingIndicator() }
+                        item(key = "typing_indicator") {
+                            TypingIndicator(Modifier.animateItem(fadeInSpec = null).entrance(fromX = (-32).dp))
+                        }
+                    }
+                }
+
+                // Кнопка «вниз» появляется, если лента не у конца
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = listState.canScrollForward,
+                    enter = scaleIn(spring(dampingRatio = 0.55f, stiffness = 400f)) + fadeIn(),
+                    exit = scaleOut() + fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
+                ) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                listState.animateScrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Вниз")
                     }
                 }
             }
@@ -361,7 +464,7 @@ fun ChatScreen(
                             MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     ),
-                    modifier = Modifier.size(48.dp).clip(CircleShape)
+                    modifier = Modifier.pressScale(0.88f).size(48.dp).clip(CircleShape)
                 ) {
                     Icon(Icons.Outlined.Folder, contentDescription = "Рабочая папка",
                         modifier = Modifier.size(22.dp))
@@ -375,7 +478,7 @@ fun ChatScreen(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     ),
-                    modifier = Modifier.size(48.dp).clip(CircleShape)
+                    modifier = Modifier.pressScale(0.88f).size(48.dp).clip(CircleShape)
                 ) {
                     Icon(Icons.Default.AttachFile, contentDescription = "Прикрепить файл",
                         modifier = Modifier.size(22.dp))
@@ -404,20 +507,48 @@ fun ChatScreen(
 
                 Spacer(Modifier.width(4.dp))
 
+                val sendScale by animateFloatAsState(
+                    targetValue = if (canSend) 1f else 0.86f,
+                    animationSpec = spring(dampingRatio = 0.5f, stiffness = 420f),
+                    label = "send_scale"
+                )
                 FilledIconButton(
                     onClick = {
-                        if (inputText.isNotBlank() || viewModel.pendingAttachments.isNotEmpty()) {
+                        if (canSend) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             viewModel.sendMessage(inputText)
                             inputText = ""
                         }
                     },
-                    enabled = (inputText.isNotBlank() || viewModel.pendingAttachments.isNotEmpty()) &&
-                            !viewModel.isGenerating,
-                    modifier = Modifier.size(48.dp),
+                    enabled = canSend,
+                    modifier = Modifier
+                        .graphicsLayer {
+                            scaleX = sendScale
+                            scaleY = sendScale
+                        }
+                        .pressScale(0.86f)
+                        .size(48.dp),
                     shape = CircleShape
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить",
-                        modifier = Modifier.size(22.dp))
+                    AnimatedContent(
+                        targetState = viewModel.isGenerating,
+                        transitionSpec = {
+                            (scaleIn(spring(dampingRatio = 0.5f, stiffness = 400f)) + fadeIn()) togetherWith
+                                (scaleOut() + fadeOut())
+                        },
+                        label = "send_icon"
+                    ) { generating ->
+                        if (generating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.5.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Отправить",
+                                modifier = Modifier.size(22.dp))
+                        }
+                    }
                 }
             }
         }
@@ -425,35 +556,28 @@ fun ChatScreen(
 }
 
 @Composable
-private fun EmptyChatState() {
+private fun EmptyChatState(onSuggestion: (String) -> Unit) {
+    val suggestions = listOf(
+        "💡 Объясни код" to "Объясни, как работает этот код",
+        "🐞 Найди баг" to "Помоги найти баг в моём коде",
+        "📝 Напиши скрипт" to "Напиши небольшой скрипт",
+        "📁 Разбери файл" to "Разбери прикреплённый файл"
+    )
     Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Box(
-            modifier = Modifier
-                .size(96.dp)
-                .clip(RoundedCornerShape(32.dp))
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer,
-                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.9f)
-                        )
-                    )
-                )
-                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f), RoundedCornerShape(32.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.Outlined.Code, contentDescription = null, modifier = Modifier.size(46.dp),
+        MorphingOrb(modifier = Modifier.entrance(index = 0, fromY = 40.dp), size = 104.dp) {
+            Icon(Icons.Outlined.Code, contentDescription = null, modifier = Modifier.size(48.dp),
                 tint = MaterialTheme.colorScheme.onPrimaryContainer)
         }
 
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(36.dp))
 
         Text("Чем помочь?", style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.entrance(index = 1))
 
         Spacer(Modifier.height(12.dp))
 
@@ -462,28 +586,57 @@ private fun EmptyChatState() {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
-            lineHeight = 22.sp
+            lineHeight = 22.sp,
+            modifier = Modifier.entrance(index = 2)
         )
 
+        Spacer(Modifier.height(28.dp))
+
+        suggestions.chunked(2).forEachIndexed { rowIndex, rowItems ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                rowItems.forEachIndexed { colIndex, (label, prompt) ->
+                    Surface(
+                        onClick = { onSuggestion(prompt) },
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .entrance(index = 3 + rowIndex * 2 + colIndex)
+                            .pressScale(0.93f)
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
     }
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, onSaveFileClick: (AttachedFile) -> Unit) {
+private fun MessageBubble(
+    message: ChatMessage,
+    modifier: Modifier = Modifier,
+    onSaveFileClick: (AttachedFile) -> Unit
+) {
     val isUser = message.isUser
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
         Surface(
             shape = RoundedCornerShape(
-                topStart = 20.dp, topEnd = 20.dp,
-                bottomStart = if (isUser) 20.dp else 6.dp,
-                bottomEnd = if (isUser) 6.dp else 20.dp
+                topStart = 26.dp, topEnd = 26.dp,
+                bottomStart = if (isUser) 26.dp else 8.dp,
+                bottomEnd = if (isUser) 8.dp else 26.dp
             ),
             color = if (isUser) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
-            else MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = if (isUser) 0.dp else 1.dp,
+            else MaterialTheme.colorScheme.surfaceContainer,
+            tonalElevation = if (isUser) 0.dp else 2.dp,
             modifier = Modifier.widthIn(max = 340.dp).animateContentSize()
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
@@ -520,7 +673,7 @@ private fun FileChip(file: AttachedFile, onClick: () -> Unit) {
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().pressScale(0.97f)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -572,22 +725,42 @@ private fun PendingFileChip(file: AttachedFile, onRemove: () -> Unit) {
 }
 
 @Composable
-private fun TypingIndicator() {
+private fun TypingIndicator(modifier: Modifier = Modifier) {
     val infinite = rememberInfiniteTransition(label = "typing")
-    val alpha1 by infinite.animateFloat(0.3f, 1f, infiniteRepeatable(tween(500), RepeatMode.Reverse), "a1")
-    val alpha2 by infinite.animateFloat(0.3f, 1f, infiniteRepeatable(tween(500, 150), RepeatMode.Reverse), "a2")
-    val alpha3 by infinite.animateFloat(0.3f, 1f, infiniteRepeatable(tween(500, 300), RepeatMode.Reverse), "a3")
+    val bounces = (0..2).map { i ->
+        infinite.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(420, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+                initialStartOffset = StartOffset(i * 140)
+            ),
+            label = "dot$i"
+        )
+    }
 
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
         Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
             Row(
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                listOf(alpha1, alpha2, alpha3).forEach { a ->
-                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).alpha(a)
-                        .background(MaterialTheme.colorScheme.primary))
+                bounces.forEach { state ->
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .graphicsLayer {
+                                val v = state.value
+                                translationY = -v * 7.dp.toPx()
+                                scaleX = 1f + 0.3f * v
+                                scaleY = 1f + 0.3f * v
+                                alpha = 0.45f + 0.55f * v
+                            }
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
                 }
             }
         }

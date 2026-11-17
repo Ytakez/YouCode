@@ -1,5 +1,15 @@
 package com.opencode.ai.ui.components
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.geometry.Offset
+import com.opencode.ai.ui.theme.floating
+import com.opencode.ai.ui.theme.pressScale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -50,8 +60,7 @@ fun AppDrawer(
     onProvidersClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onModelsClick: () -> Unit,
-    onSkillsClick: () -> Unit = {},
-    onLocalModelsClick: () -> Unit = {}
+    onSkillsClick: () -> Unit = {}
 ) {
     val startOfToday = java.util.Calendar.getInstance().apply {
         set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -75,41 +84,65 @@ fun AppDrawer(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // Header / Logo
-            Row(
+            // Brand panel
+            Surface(
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 14.dp, vertical = 14.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.primaryContainer,
-                                    MaterialTheme.colorScheme.tertiaryContainer
-                                )
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Outlined.Code,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(22.dp)
+                    val shimmer = rememberInfiniteTransition(label = "brand_shimmer")
+                    val shift by shimmer.animateFloat(
+                        initialValue = 0f,
+                        targetValue = 160f,
+                        animationSpec = infiniteRepeatable(tween(3200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                        label = "brand_shift"
                     )
+                    Box(
+                        modifier = Modifier
+                            .floating(amplitude = 3.dp, periodMs = 2600)
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        MaterialTheme.colorScheme.surface,
+                                        MaterialTheme.colorScheme.tertiaryContainer,
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    ),
+                                    start = Offset(shift, 0f),
+                                    end = Offset(shift + 120f, 120f)
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Outlined.Code,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(25.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text(
+                            "YouCode",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            "AI workspace",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+                        )
+                    }
                 }
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    "YouCode",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
             }
 
             // New chat
@@ -167,16 +200,6 @@ fun AppDrawer(
 
             // Bottom actions (always on screen)
             DrawerItem(
-                icon = Icons.Outlined.CloudUpload,
-                label = "Загрузить диалог",
-                onClick = { }
-            )
-            DrawerItem(
-                icon = Icons.Outlined.Speed,
-                label = "Лимиты",
-                onClick = { }
-            )
-            DrawerItem(
                 icon = Icons.Outlined.Extension,
                 label = "Скиллы и MCP",
                 onClick = onSkillsClick
@@ -207,7 +230,8 @@ private fun DrawerItem(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .pressScale(0.96f)
+            .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
             .background(
                 if (highlighted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
@@ -246,7 +270,8 @@ private fun SessionItem(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .pressScale(0.97f)
+            .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     )

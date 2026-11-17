@@ -98,25 +98,84 @@ OPENCODE_PASSWORD='замените-на-длинный-пароль' opencode s
 Не открывайте порт 4096 напрямую в интернет. Для удалённого доступа используйте защищённый туннель/официальное pairing OpenCode. API-подключение требует работающего компьютера/сервера с OpenCode; один только ZIP не может предоставить бесплатные вычисления.
 
 
-## 12 бесплатных моделей через OpenRouter
+## Pollinations API integration
 
-В разделе **Провайдеры → OpenRouter — 12 бесплатных моделей** укажи один API-ключ OpenRouter. Base URL уже задан: `https://openrouter.ai/api/v1`. Поле модели фиксировано: YouCode отправляет ID выбранной модели из каталога. После сохранения выбери одну из 12 моделей в списке моделей и отправь сообщение.
+The 12 model choices in the app are routed through the Pollinations OpenAI-compatible API:
+`https://gen.pollinations.ai/v1`.
 
-В проект включены бесплатные на момент подготовки варианты OpenRouter:
+1. Open **Providers** in the app.
+2. Select **Pollinations AI (12 моделей)**.
+3. Create a secret API key at https://enter.pollinations.ai and paste it into the API-key field.
+4. Save the provider, then choose any of the 12 Pollinations-labelled models in the model picker.
 
-1. `nvidia/nemotron-3-ultra-550b-a55b:free`
-2. `nvidia/nemotron-3.5-super-vl:free`
-3. `baidu/ernie-5.5-flash-preview:free`
-4. `thinkingmachines/inkling-2-small:free`
-5. `nvidia/nemotron-3.5-lightning:free`
-6. `dots-studio/dots-3-note-preview:free`
-7. `particle-ai/particle-1:free`
-8. `inclusionai/ling-3.2-flash:free`
-9. `cohere/north-mini-code:free`
-10. `recursive/flint-v1.0:free`
-11. `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`
-12. `liquid/lfm-3-1.7b:free`
+The app maps its 12 stable model choices to Pollinations model aliases. Pollinations may change its live model catalog, aliases, access rules, and pricing. API use requires a Pollinations key and consumes the account's Pollen credits; this integration does **not** promise unlimited or permanently free inference. Check the Pollinations dashboard before use.
 
-**Важно:** нулевая цена модели не означает безлимитный доступ или гарантию бесплатности навсегда. OpenRouter указывает лимит для бесплатных вариантов `:free` — до 20 запросов в минуту и 50 запросов в сутки на бесплатном аккаунте; отдельные модели и провайдеры могут иметь дополнительные ограничения или временно быть недоступны. Каталог и лимиты меняются, поэтому перед использованием проверяй актуальный список: https://openrouter.ai/collections/free-models. Не отправляй через бесплатные endpoint конфиденциальные данные.
+## Live MargyCode / OpenCode catalogue
 
-Ключ создаётся здесь: https://openrouter.ai/settings/keys. Не публикуй ключ в открытом репозитории и не отправляй его в чат.
+The provider screen now reads the live provider integrations from `GET /api/integration` and the model catalogue from `GET /api/model` on the configured OpenCode Server. Model IDs retain their `providerID` so identically named models from different providers remain distinct. Provider API keys entered for a live integration are sent to the server's `POST /api/integration/{providerID}/connect/key` endpoint; they are not stored in YouCode preferences. Refreshing the provider screen reloads both catalogues. OAuth/browser sign-in and Claude Code's local external-process flow are not yet implemented in this YouCode port.
+
+
+## Авторизация провайдеров через OpenCode OAuth
+
+Для провайдеров, у которых OpenCode Server объявляет OAuth-метод, экран **Провайдеры** показывает кнопку входа. YouCode вызывает официальные маршруты OpenCode:
+
+- `POST /api/integration/{provider}/connect/oauth`
+- `GET /api/integration/{provider}/connect/oauth/{attempt}`
+- `POST /api/integration/{provider}/connect/oauth/{attempt}/complete`
+
+Браузер открывает страницу авторизации. Для обычного browser-flow приложение ожидает статус `complete`; если сервер использует режим `code`, приложение просит вставить код со страницы. OAuth работает через подключённый пользователем OpenCode Server — YouCode не содержит собственных client secrets провайдеров.
+
+## Локальные GGUF-модели и native runtime
+
+В исходниках MargyCode локальный запуск GGUF реализован через `llama.cpp` (`llama-server`) как отдельный ARM64 native executable. В исходном архиве MargyCode исходный код и build script есть, но готовых `libllamaserver*.so` в архиве нет. Поэтому нельзя честно включить рабочий локальный inference только копированием Kotlin-кода: необходима сборка native runtime под Android NDK и включение бинарников в APK.
+
+В `tools/build-llama.sh` добавлен build script из MargyCode. Он собирает базовый и ускоренный ARM64 варианты и кладёт их в `app/src/main/jniLibs/arm64-v8a/`. Для сборки нужны Android NDK, CMake, Ninja и доступ к GitHub для получения исходников llama.cpp. Пока эти `.so` не собраны и не добавлены, локальные GGUF-модели не запускаются; облачные провайдеры и OAuth через OpenCode Server работают независимо от этого.
+
+
+## Android 17 / Material You visual refresh
+
+The interface has been refreshed around Material 3 expressive styling:
+- wallpaper-based dynamic colors on Android 12 and newer, with light/dark system theme support;
+- softer, more expressive corner radii and tonal surfaces;
+- refreshed YouCode chat header and model selector;
+- updated empty-chat welcome state;
+- redesigned navigation drawer brand panel.
+
+The redesign changes presentation only; existing chat, provider, model, and settings flows are retained.
+
+
+## Анимации и дизайн (v1.2.0)
+
+Общие помощники лежат в `ui/theme/Motion.kt`:
+
+- `pressScale()` — пружинное сжатие кнопок, карточек и пунктов меню под пальцем;
+- `entrance()` — упругое каскадное появление (прозрачность + сдвиг + zoom);
+- `aurora()` — живой фон из дрейфующих пятен цвета Material You;
+- `MorphingOrb` — логотип с морфингом формы, парением и пульсирующим свечением;
+- `floating()` — плавное «парение».
+
+Что изменилось в интерфейсе:
+
+- чат: сообщения въезжают с нужной стороны, прыгающие точки набора, кнопка «вниз», индикатор загрузки в кнопке отправки, вибро-отклик, подсказки в пустом чате, тень верхней панели при прокрутке;
+- переходы между экранами с учётом направления (shared axis) и predictive back на Android 14+ (экран уменьшается и скругляется под жестом);
+- шторка, настройки, скиллы, провайдеры и выбор модели получили анимации появления и реакцию на нажатие;
+- скругления, поверхности и заголовки приведены к более выразительному стилю Material 3.
+
+Если в системе отключены анимации, бесконечные эффекты (фон, свечение, парение) Compose не запускает.
+
+## Встроенный OpenCode: бесплатные модели без ключей (v1.3.0)
+
+Идея и сборка взяты из [MargyCode](https://github.com/) (MIT, лицензия в `engine/LICENSE.MargyCode`).
+Приложение запускает настоящий `opencode serve` на самом телефоне (`127.0.0.1`), а YouCode общается с ним
+по тому же API, что и раньше с внешним OpenCode Server. Запросы идут от официального opencode, поэтому
+бесплатные модели OpenCode не блокируются, и компьютер не нужен.
+
+- Бинарник `libopencode.so` собирает GitHub Actions скриптом `engine/build-engine.sh`
+  (opencode v2.2.5 + Bun для Android). Первая сборка долгая, дальше результат берётся из кэша.
+  Файл в репозиторий не заливается (он большой), поэтому заливай исходники, а APK бери из Actions.
+- Нужен Android 9+ и arm64 (`minSdk` поднят до 28).
+- При старте приложение само подключает встроенный сервер и выбирает бесплатную модель.
+  Если ты указал внешний OpenCode Server в «Провайдерах», он остаётся приоритетным.
+- Модели «Pollinations» по-прежнему требуют ключ и больше не помечены как бесплатные.
+- У бесплатных моделей OpenCode есть лимит использования. По README MargyCode он, похоже, считается по IP.
+- Пока ответ генерируется, работает уведомление-сервис, чтобы система не замораживала приложение.

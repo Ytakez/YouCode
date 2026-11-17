@@ -10,10 +10,11 @@ android {
 
     defaultConfig {
         applicationId = "com.opencode.ai"
-        minSdk = 26
+        ndk { abiFilters += "arm64-v8a" }
+        minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -35,6 +36,12 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+    packaging {
+        jniLibs.useLegacyPackaging = true
+        // strip отрезал бы программу, которую Bun хранит в конце своего файла
+        jniLibs.keepDebugSymbols += setOf("**/libopencode.so")
     }
 }
 

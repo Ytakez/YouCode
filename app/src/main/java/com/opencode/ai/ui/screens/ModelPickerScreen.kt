@@ -1,5 +1,12 @@
 package com.opencode.ai.ui.screens
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.runtime.getValue
+import com.opencode.ai.ui.theme.aurora
+import com.opencode.ai.ui.theme.entrance
+import com.opencode.ai.ui.theme.pressScale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -100,7 +107,7 @@ fun ModelPickerScreen(
         )
 
         Text(
-            text = "YouCode Console · бесплатно",
+            text = "Каталог YouCode + Margy / OpenCode",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,
@@ -112,10 +119,11 @@ fun ModelPickerScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(viewModel.filteredModels, key = { it.id }) { model ->
+            itemsIndexed(viewModel.filteredModels, key = { _, it -> "${it.remoteProviderId ?: it.provider}/${it.id}" }) { index, model ->
                 ModelItem(
+                    modifier = Modifier.animateItem(fadeInSpec = null).entrance(index = index, enabled = index < 10, fromY = 20.dp),
                     model = model,
-                    isSelected = model.id == viewModel.currentModel.id,
+                    isSelected = model.id == viewModel.currentModel.id && model.remoteProviderId == viewModel.currentModel.remoteProviderId,
                     onClick = { onModelSelected(model) }
                 )
             }
@@ -125,13 +133,19 @@ fun ModelPickerScreen(
 }
 
 @Composable
-private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit) {
+private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val container by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer,
+        animationSpec = spring(stiffness = 400f),
+        label = "model_item_color"
+    )
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(24.dp),
-        color = if (isSelected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier
+        color = container,
+        modifier = modifier
             .fillMaxWidth()
+            .pressScale(0.97f)
             .then(
                 if (isSelected) Modifier.border(
                     1.5.dp,
@@ -175,7 +189,7 @@ private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit) 
                     Spacer(Modifier.width(8.dp))
                     Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primaryContainer) {
                         Text(
-                            text = "бесплатно",
+                            text = if (model.isFree) "бесплатно" else model.provider,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Medium,
