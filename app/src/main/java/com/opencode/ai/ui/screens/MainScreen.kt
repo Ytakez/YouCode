@@ -11,7 +11,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.using
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -92,7 +91,7 @@ fun MainScreen(viewModel: ChatViewModel) {
                     ) { it / 12 } + fadeIn()) togetherWith
                         (slideOutHorizontally(
                             animationSpec = spring(dampingRatio = 0.9f, stiffness = 500f)
-                        ) { -it / 18 } + fadeOut()) using SizeTransform(clip = false)
+                        ) { -it / 18 } + fadeOut())
                 },
                 label = "screen_transition"
             ) { screen ->

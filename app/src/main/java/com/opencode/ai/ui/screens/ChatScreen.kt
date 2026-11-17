@@ -258,10 +258,7 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(viewModel.messages, key = { it.id }) { msg ->
-                        AnimatedVisibility(
-                            visible = true,
-                            enter = fadeIn(tween(260)) + slideInVertically(tween(320)) { it / 12 }
-                        ) {
+                        Box(modifier = Modifier.animateItem()) {
                             MessageBubble(
                                 message = msg,
                                 onSaveFileClick = { file -> createDocumentLauncher.launch(file.name) }
