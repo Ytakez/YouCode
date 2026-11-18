@@ -16,6 +16,7 @@ import com.opencode.ai.data.ChatSession
 import com.opencode.ai.data.SampleData
 import com.opencode.ai.engine.Engine
 import com.opencode.ai.engine.EngineService
+import kotlinx.coroutines.sync.withLock
 import com.opencode.ai.data.SmartMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -61,7 +62,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var openCodeCatalogError by mutableStateOf<String?>(null)
         private set
 
-    // ---- Встроенный opencode (из MargyCode): бесплатные модели без ключей и без компьютера ----
+    // ---- Встроенный OpenCode: бесплатные модели без ключей и без компьютера ----
     private val engine = Engine(application)
 
     /** "", "starting", "ready", "error", "missing" (нет libopencode.so), "external" (свой сервер). */
@@ -70,17 +71,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var engineError by mutableStateOf<String?>(null)
         private set
 
+    /** true, если движком управляет само приложение (нет внешнего сервера и есть бинарник). */
+    private var engineManaged = false
+    private val engineLock = kotlinx.coroutines.sync.Mutex()
+
     init {
         startEmbeddedEngine()
     }
 
+    /**
+     * У каждой установки свой движок: свой процесс, свой пароль и свои данные в закрытой папке приложения.
+     * Ничего не общее между людьми, и никакого центрального сервера нет.
+     */
     private fun startEmbeddedEngine() {
         if (!engine.available) { engineState = "missing"; return }
         val saved = providerPrefs.getString("base_opencode-server", "").orEmpty()
         // Если пользователь подключил свой внешний сервер, его не трогаем.
         if (saved.isNotBlank() && !saved.contains("127.0.0.1")) { engineState = "external"; return }
-        engineState = "starting"
-        viewModelScope.launch {
+        engineManaged = true
+        viewModelScope.launch { runEngine() }
+    }
+
+    /** Запускает движок, если он не работает (первый старт и перезапуск после того, как система его убила). */
+    private suspend fun runEngine() {
+        engineLock.withLock {
+            if (engine.running) return
+            engineState = "starting"
             runCatching { engine.start() }
                 .onSuccess {
                     providerPrefs.edit()
@@ -104,7 +120,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
-    /** Loads the same live model catalogue that MargyCode reads from OpenCode's /api/model. */
+    /** Loads the live model catalogue from OpenCode's /api/model. */
     fun refreshOpenCodeModels() {
         val endpoint = providerPrefs.getString("base_opencode-server", "").orEmpty().trim()
         val password = providerPrefs.getString("key_opencode-server", "").orEmpty().trim()
@@ -221,7 +237,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Stores a provider credential in the connected OpenCode server, as MargyCode does. */
+    /** Stores a provider credential in the connected OpenCode server. */
     fun connectOpenCodeProvider(integrationId: String, apiKey: String, onResult: (String?) -> Unit = {}) {
         val endpoint = providerPrefs.getString("base_opencode-server", "").orEmpty().trim().trimEnd('/')
         val password = providerPrefs.getString("key_opencode-server", "").orEmpty().trim()
@@ -249,7 +265,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Starts the same OpenCode OAuth flow used by MargyCode. */
+    /** Starts the OpenCode OAuth flow for a provider. */
     fun startOpenCodeOAuth(integrationId: String, methodId: String, onResult: (JSONObject?, String?) -> Unit) {
         openCodeRequest("POST", "/api/integration/${enc(integrationId)}/connect/oauth", JSONObject().put("methodID", methodId)) { json, error ->
             onResult(json?.optJSONObject("data") ?: json, error)
@@ -402,6 +418,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         isGenerating = true
         EngineService.start(getApplication<Application>())
         viewModelScope.launch {
+            // Если система убила встроенный движок в фоне, поднимаем его заново.
+            if (engineManaged && !engine.running) runEngine()
             val providerId = providerPrefs.getString("active_provider", "").orEmpty()
             val endpoint = providerPrefs.getString("base_${providerId}", "").orEmpty().trim()
             val apiKey = providerPrefs.getString("key_${providerId}", "").orEmpty().trim()
@@ -424,7 +442,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }.fold(
                     onSuccess = { it to emptyList<AttachedFile>() },
-                    onFailure = { "Ошибка OpenCode Server: ${it.message ?: "не удалось выполнить запрос"}. Проверь адрес сервера, пароль и наличие выбранной бесплатной модели в OpenCode." to emptyList() }
+                    onFailure = {
+                        val reason = it.message ?: "не удалось выполнить запрос"
+                        if (reason.contains("limit", ignoreCase = true)) {
+                            "Бесплатный лимит OpenCode исчерпан. Подожди сброса, смени сеть (Wi-Fi или мобильный интернет), выбери другую модель или подключи свой ключ в «Провайдерах».\n\n($reason)" to emptyList()
+                        } else {
+                            "Ошибка OpenCode: $reason. Проверь, что выбрана модель OpenCode и сервер запущен." to emptyList()
+                        }
+                    }
                 )
             } else if (endpoint.isNotBlank() && requestModel.isNotBlank() && apiKey.isNotBlank()) {
                 runCatching {

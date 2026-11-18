@@ -112,7 +112,7 @@ fun MainScreen(viewModel: ChatViewModel) {
                     shape = RoundedCornerShape((32f * animatedBack).dp)
                     clip = animatedBack > 0.001f
                 }
-                .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                .background(MaterialTheme.colorScheme.background)
         ) {
             AnimatedContent(
                 targetState = currentScreen,

@@ -1,35 +1,79 @@
 #!/bin/sh
-# Builds opencode for Android: upstream source (engine/opencode, a tag of
-# anomalyco/opencode) compiled onto the official Bun for Android from oven-sh.
-# Output: app/src/main/jniLibs/arm64-v8a/libopencode.so, a plain executable
-# named like a library so Android unpacks it where it may be run from.
-set -e
-here=$(cd "$(dirname "$0")" && pwd)
-BUN_VERSION=1.4.4
-OPENCODE_TAG=v2.2.5
-cd "$here"
-mkdir -p dl
-fetch() {
-    [ -f "dl/$1" ] || curl -fsSL -o "dl/$1" "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$1"
-}
-fetch bun-linux-aarch64-android.zip
-fetch bun-linux-x64.zip
-curl -fsSL -o dl/SHASUMS256.txt "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/SHASUMS256.txt"
-(cd dl && grep -E '  (bun-linux-aarch64-android|bun-linux-x64)\.zip$' SHASUMS256.txt | sha256sum -c -)
-[ -x bun-android/bun-linux-aarch64-android/bun ] || unzip -oq dl/bun-linux-aarch64-android.zip -d bun-android
-[ -x bun-x64/bun-linux-x64/bun ] || unzip -oq dl/bun-linux-x64.zip -d bun-x64
-export PATH="$here/bun-x64/bun-linux-x64:$PATH"
+# Сборка встроенного движка YouCode: opencode из исходников на Bun для Android.
+# Результат: app/src/main/jniLibs/arm64-v8a/libopencode.so
+# (обычный исполняемый файл с именем библиотеки: только из папки библиотек Android разрешает запуск).
+set -eu
 
-if [ ! -d opencode ]; then
-    git clone -q --depth 1 --branch "$OPENCODE_TAG" https://github.com/anomalyco/opencode.git opencode
-    (cd opencode && git apply ../patches/android-bun.patch && bun install)
-    # the arm64 builds of opencode's native helpers, as its own build fetches them
-    (cd opencode/packages/cli && bun install --os="*" --cpu="*" --libc="*" @opentui/core@$(bun -e 'console.log(require("./package.json").dependencies["@opentui/core"])') @opencode/pty@$(bun -e 'console.log(require("./package.json").dependencies["@opencode/pty"])'))
+ROOT=$(cd "$(dirname "$0")" && pwd)
+WORK="$ROOT/.work"
+TARGET_DIR="$ROOT/../app/src/main/jniLibs/arm64-v8a"
+
+BUN_VERSION="1.4.4"
+OPENCODE_TAG="v2.2.5"
+BUN_BASE="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}"
+ANDROID_ZIP="bun-linux-aarch64-android.zip"
+HOST_ZIP="bun-linux-x64.zip"
+
+log() { printf '==> %s\n' "$*"; }
+
+mkdir -p "$WORK/dl" "$TARGET_DIR"
+cd "$WORK"
+
+# 1. Bun: версия для Android (она войдёт в итоговый файл) и версия для этой машины (ею собираем)
+log "Скачиваю Bun $BUN_VERSION"
+curl -fsSL -o dl/SHASUMS256.txt "$BUN_BASE/SHASUMS256.txt"
+for zip in "$ANDROID_ZIP" "$HOST_ZIP"; do
+    [ -f "dl/$zip" ] || curl -fsSL -o "dl/$zip" "$BUN_BASE/$zip"
+done
+(cd dl && grep -E "  ($ANDROID_ZIP|$HOST_ZIP)\$" SHASUMS256.txt | sha256sum -c -)
+
+[ -d bun-android ] || unzip -oq "dl/$ANDROID_ZIP" -d bun-android
+[ -d bun-host ] || unzip -oq "dl/$HOST_ZIP" -d bun-host
+ANDROID_BUN="$WORK/bun-android/${ANDROID_ZIP%.zip}/bun"
+HOST_BUN_DIR="$WORK/bun-host/${HOST_ZIP%.zip}"
+PATH="$HOST_BUN_DIR:$PATH"
+export PATH
+
+# 2. Исходники opencode нужной версии + наш патч
+if [ ! -f src/.prepared ]; then
+    log "Получаю opencode $OPENCODE_TAG"
+    rm -rf src
+    git clone -q --depth 1 --branch "$OPENCODE_TAG" https://github.com/anomalyco/opencode.git src
+    git -C src apply "$ROOT/patches/android-bun.patch"
+    (cd src && bun install)
+    # нативные помощники для arm64, как их подтягивает штатная сборка opencode
+    (
+        cd src/packages/cli
+        # версия может быть записана как "catalog:", тогда берём её из каталога корневого package.json
+        pkg_version() {
+            PKG="$1" bun -e '
+                const p = require("./package.json"), r = require("../../package.json");
+                let v = p.dependencies[process.env.PKG];
+                if (String(v).startsWith("catalog:")) {
+                    const c = (r.workspaces && r.workspaces.catalog) || r.catalog || {};
+                    v = c[process.env.PKG];
+                }
+                console.log(v);
+            '
+        }
+        tui_ver=$(pkg_version "@opentui/core")
+        pty_ver=$(pkg_version "@opencode/pty")
+        bun install --os="*" --cpu="*" --libc="*" "@opentui/core@$tui_ver" "@opencode/pty@$pty_ver"
+    )
+    touch src/.prepared
 fi
-cd opencode/packages/cli
-MARGY_BUN_EXECUTABLE="$here/bun-android/bun-linux-aarch64-android/bun" OPENCODE_TARGET=linux-arm64 \
-    OPENCODE_CHANNEL=latest OPENCODE_VERSION="${OPENCODE_TAG#v}" \
-    bun run script/build.ts --skip-install --skip-web-ui --outdir="$here/out"
-mkdir -p "$here/../app/src/main/jniLibs/arm64-v8a"
-cp "$here/out/cli-linux-arm64/bin/opencode" "$here/../app/src/main/jniLibs/arm64-v8a/libopencode.so"
-ls -la "$here/../app/src/main/jniLibs/arm64-v8a/libopencode.so"
+
+# 3. Сборка единого исполняемого файла под linux-arm64 (bionic)
+log "Собираю opencode"
+(
+    cd src/packages/cli
+    YOUCODE_BUN_EXECUTABLE="$ANDROID_BUN" \
+    OPENCODE_TARGET="linux-arm64" \
+    OPENCODE_CHANNEL="latest" \
+    OPENCODE_VERSION="${OPENCODE_TAG#v}" \
+        bun run script/build.ts --skip-install --skip-web-ui --outdir="$WORK/out"
+)
+
+cp "$WORK/out/cli-linux-arm64/bin/opencode" "$TARGET_DIR/libopencode.so"
+log "Готово:"
+ls -la "$TARGET_DIR/libopencode.so"

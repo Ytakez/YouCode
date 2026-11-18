@@ -169,7 +169,7 @@ fun ProvidersScreen(
 
             if (liveProviders.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                Text("Провайдеры Margy / OpenCode", style = MaterialTheme.typography.labelLarge,
+                Text("Провайдеры OpenCode", style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                 Text("Загружено с подключённого OpenCode Server. Нажми на провайдера, чтобы добавить API-ключ.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,

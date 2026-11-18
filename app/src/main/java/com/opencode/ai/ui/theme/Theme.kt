@@ -6,6 +6,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -93,6 +94,39 @@ private val YouCodeShapes = Shapes(
     extraLarge = RoundedCornerShape(48.dp)
 )
 
+private fun ColorScheme.withNeutralSurfaces(dark: Boolean): ColorScheme =
+    if (dark) copy(
+        background = Color(0xFF1F1E1D),
+        surface = Color(0xFF1F1E1D),
+        surfaceTint = Color(0xFF1F1E1D),
+        onBackground = Color(0xFFEAE8E3),
+        onSurface = Color(0xFFEAE8E3),
+        surfaceVariant = Color(0xFF3A3937),
+        onSurfaceVariant = Color(0xFFB9B6AE),
+        surfaceContainerLowest = Color(0xFF1F1E1D),
+        surfaceContainerLow = Color(0xFF242321),
+        surfaceContainer = Color(0xFF2A2927),
+        surfaceContainerHigh = Color(0xFF30302E),
+        surfaceContainerHighest = Color(0xFF3A3937),
+        outline = Color(0xFF8A877F),
+        outlineVariant = Color(0xFF3F3E3B)
+    ) else copy(
+        background = Color(0xFFFAF9F5),
+        surface = Color(0xFFFAF9F5),
+        surfaceTint = Color(0xFFFAF9F5),
+        onBackground = Color(0xFF1F1E1D),
+        onSurface = Color(0xFF1F1E1D),
+        surfaceVariant = Color(0xFFE9E7DE),
+        onSurfaceVariant = Color(0xFF5F5D56),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        surfaceContainerLow = Color(0xFFF5F4EE),
+        surfaceContainer = Color(0xFFF0EEE6),
+        surfaceContainerHigh = Color(0xFFEAE8DF),
+        surfaceContainerHighest = Color(0xFFE4E2D9),
+        outline = Color(0xFF8A877F),
+        outlineVariant = Color(0xFFD9D6CC)
+    )
+
 @Composable
 fun YouCodeTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -113,13 +147,16 @@ fun YouCodeTheme(
     }
 
     // Read the revision so Compose recalculates the platform wallpaper palette.
-    val colorScheme = when {
+    val baseScheme = when {
         paletteRevision >= 0 && dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
+
+    // Фон и поверхности нейтральные (как в приложении Claude), акценты остаются из палитры.
+    val colorScheme = baseScheme.withNeutralSurfaces(darkTheme)
 
     // Smoothly interpolate the wallpaper palette when the system palette changes.
     val animatedScheme = colorScheme.copy(

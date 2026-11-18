@@ -110,7 +110,7 @@ The 12 model choices in the app are routed through the Pollinations OpenAI-compa
 
 The app maps its 12 stable model choices to Pollinations model aliases. Pollinations may change its live model catalog, aliases, access rules, and pricing. API use requires a Pollinations key and consumes the account's Pollen credits; this integration does **not** promise unlimited or permanently free inference. Check the Pollinations dashboard before use.
 
-## Live MargyCode / OpenCode catalogue
+## Каталог OpenCode (live)
 
 The provider screen now reads the live provider integrations from `GET /api/integration` and the model catalogue from `GET /api/model` on the configured OpenCode Server. Model IDs retain their `providerID` so identically named models from different providers remain distinct. Provider API keys entered for a live integration are sent to the server's `POST /api/integration/{providerID}/connect/key` endpoint; they are not stored in YouCode preferences. Refreshing the provider screen reloads both catalogues. OAuth/browser sign-in and Claude Code's local external-process flow are not yet implemented in this YouCode port.
 
@@ -124,13 +124,6 @@ The provider screen now reads the live provider integrations from `GET /api/inte
 - `POST /api/integration/{provider}/connect/oauth/{attempt}/complete`
 
 Браузер открывает страницу авторизации. Для обычного browser-flow приложение ожидает статус `complete`; если сервер использует режим `code`, приложение просит вставить код со страницы. OAuth работает через подключённый пользователем OpenCode Server — YouCode не содержит собственных client secrets провайдеров.
-
-## Локальные GGUF-модели и native runtime
-
-В исходниках MargyCode локальный запуск GGUF реализован через `llama.cpp` (`llama-server`) как отдельный ARM64 native executable. В исходном архиве MargyCode исходный код и build script есть, но готовых `libllamaserver*.so` в архиве нет. Поэтому нельзя честно включить рабочий локальный inference только копированием Kotlin-кода: необходима сборка native runtime под Android NDK и включение бинарников в APK.
-
-В `tools/build-llama.sh` добавлен build script из MargyCode. Он собирает базовый и ускоренный ARM64 варианты и кладёт их в `app/src/main/jniLibs/arm64-v8a/`. Для сборки нужны Android NDK, CMake, Ninja и доступ к GitHub для получения исходников llama.cpp. Пока эти `.so` не собраны и не добавлены, локальные GGUF-модели не запускаются; облачные провайдеры и OAuth через OpenCode Server работают независимо от этого.
-
 
 ## Android 17 / Material You visual refresh
 
@@ -165,17 +158,20 @@ The redesign changes presentation only; existing chat, provider, model, and sett
 
 ## Встроенный OpenCode: бесплатные модели без ключей (v1.3.0)
 
-Идея и сборка взяты из [MargyCode](https://github.com/) (MIT, лицензия в `engine/LICENSE.MargyCode`).
 Приложение запускает настоящий `opencode serve` на самом телефоне (`127.0.0.1`), а YouCode общается с ним
-по тому же API, что и раньше с внешним OpenCode Server. Запросы идут от официального opencode, поэтому
-бесплатные модели OpenCode не блокируются, и компьютер не нужен.
+по обычному HTTP API, так же как раньше с внешним OpenCode Server. Запросы идут от официального opencode,
+поэтому бесплатные модели OpenCode не блокируются, и компьютер не нужен.
 
-- Бинарник `libopencode.so` собирает GitHub Actions скриптом `engine/build-engine.sh`
-  (opencode v2.2.5 + Bun для Android). Первая сборка долгая, дальше результат берётся из кэша.
-  Файл в репозиторий не заливается (он большой), поэтому заливай исходники, а APK бери из Actions.
-- Нужен Android 9+ и arm64 (`minSdk` поднят до 28).
+- `libopencode.so` собирает GitHub Actions скриптом `engine/build-engine.sh` (opencode v2.2.5 на Bun для Android,
+  патч в `engine/patches/`). Первая сборка долгая, дальше результат берётся из кэша.
+  Файл в репозиторий не заливается (он большой), заливай исходники, а APK бери из Actions.
+- Нужен Android 9+ и arm64 (`minSdk` = 28).
 - При старте приложение само подключает встроенный сервер и выбирает бесплатную модель.
-  Если ты указал внешний OpenCode Server в «Провайдерах», он остаётся приоритетным.
-- Модели «Pollinations» по-прежнему требуют ключ и больше не помечены как бесплатные.
-- У бесплатных моделей OpenCode есть лимит использования. По README MargyCode он, похоже, считается по IP.
-- Пока ответ генерируется, работает уведомление-сервис, чтобы система не замораживала приложение.
+  Если в «Провайдерах» указан внешний сервер, он остаётся приоритетным.
+- Модели «Pollinations» требуют ключ и не помечены как бесплатные.
+- У бесплатных моделей OpenCode есть лимит использования, судя по всему, он считается по IP-адресу.
+- Пока идёт ответ, работает уведомление-сервис, чтобы система не замораживала приложение.
+- Документация по встраиванию opencode в JS-приложения (`@opencode/sdk`) здесь не используется:
+  она работает внутри JS-рантайма и не открывает HTTP-порт, а приложению на Kotlin нужен именно сервер.
+
+Лицензии сторонних компонентов: `THIRD_PARTY_LICENSES.md`.

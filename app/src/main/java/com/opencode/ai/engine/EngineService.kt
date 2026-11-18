@@ -13,44 +13,57 @@ import android.os.IBinder
 import com.opencode.ai.MainActivity
 
 /**
- * Не даёт системе заморозить приложение (и opencode вместе с ним),
- * пока модель отвечает, чтобы длинный ответ не обрывался при выходе из приложения.
+ * Фоновый сервис с уведомлением: пока модель отвечает, система не замораживает приложение
+ * вместе со встроенным OpenCode, и длинный ответ не обрывается при выходе из приложения.
  */
 class EngineService : Service() {
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Работа модели", NotificationManager.IMPORTANCE_LOW))
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val n = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Модель отвечает")
-            .setContentText("YouCode доделает ответ в фоне")
-            .setContentIntent(open)
-            .setOngoing(true)
-            .build()
-        if (Build.VERSION.SDK_INT >= 29) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        else startForeground(1, n)
+        ensureChannel()
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         return START_NOT_STICKY
     }
 
+    private fun ensureChannel() {
+        val channel = NotificationChannel(CHANNEL_ID, "Работа модели", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    private fun buildNotification(): Notification {
+        val openApp = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setContentTitle("Модель отвечает")
+            .setContentText("YouCode доделает ответ в фоне")
+            .setContentIntent(openApp)
+            .setOngoing(true)
+            .build()
+    }
+
     companion object {
-        private const val CHANNEL = "work"
-        private var on = false
+        private const val CHANNEL_ID = "work"
+        private const val NOTIFICATION_ID = 1
+        private var active = false
 
         fun start(context: Context) {
-            if (on) return
-            on = true
+            if (active) return
+            active = true
             runCatching { context.startForegroundService(Intent(context, EngineService::class.java)) }
         }
 
         fun stop(context: Context) {
-            if (!on) return
-            on = false
+            if (!active) return
+            active = false
             context.stopService(Intent(context, EngineService::class.java))
         }
     }

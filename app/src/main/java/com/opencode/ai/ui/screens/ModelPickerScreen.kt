@@ -107,7 +107,7 @@ fun ModelPickerScreen(
         )
 
         Text(
-            text = "Каталог YouCode + Margy / OpenCode",
+            text = "Каталог YouCode + OpenCode",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,

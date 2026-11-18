@@ -79,7 +79,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null) {
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().aurora(0.8f).padding(padding)
+            modifier = Modifier.fillMaxSize().padding(padding)
                 .verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {

@@ -176,7 +176,7 @@ object SampleData {
 
 
     val providers = listOf(
-        ProviderItem("opencode-server", "Margy / OpenCode Server", "Встроенный OpenCode запускается в приложении сам и даёт бесплатные модели без ключей. Можно указать адрес внешнего сервера.", "opencode-server"),
+        ProviderItem("opencode-server", "OpenCode (встроенный или свой сервер)", "Встроенный OpenCode запускается в приложении сам и даёт бесплатные модели без ключей. Можно указать адрес внешнего сервера.", "opencode-server"),
         ProviderItem("opencode-go", "OpenCode Go", "Подписка opencode: Kimi, GLM, DeepSeek, Qwen, MiniMax и другие открытые модели за фиксированную цену.", "opencode"),
         ProviderItem("opencode-zen", "OpenCode Zen", "Аккаунт opencode: бесплатные модели, а с балансом все модели Zen, включая Claude, GPT и Gemini.", "opencode"),
         ProviderItem("claude", "Claude", "Подписка Claude Pro или Max через официальный Claude Code.", "opencode"),
