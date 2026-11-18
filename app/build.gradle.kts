@@ -9,7 +9,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.opencode.ai"
+        applicationId = "ytk.youcode.dev"
         ndk { abiFilters += "arm64-v8a" }
         minSdk = 28
         targetSdk = 35
