@@ -120,6 +120,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        // На всякий случай сохраняем чат перед уничтожением ViewModel
+        saveSession(currentSessionId)
         engine.stop()
         super.onCleared()
     }
@@ -423,6 +425,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
             sessions.add(0, session)
             currentSessionId = session.id
+            chatPrefs.edit().putString("current_session_id", session.id).apply()
             persistChatsToDisk()
         }
         val sessionId = currentSessionId
@@ -493,9 +496,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             generationStatus = "Получен ответ · оформляю результат"
             val shownModel = if (providerId == "pollinations" || providerId == "opencode-server") currentModel.name else if (remoteModel.isNotBlank()) remoteModel else currentModel.name
+            val extracted = extractDownloadableFiles(reply.first)
+            val allAttachments = (reply.second + extracted).distinctBy { it.name + it.contentPreview.take(80) }
             messages.add(ChatMessage(
                 id = UUID.randomUUID().toString(), content = reply.first, isUser = false,
-                modelName = shownModel, attachments = reply.second
+                modelName = shownModel, attachments = allAttachments
             ))
             isGenerating = false
             generationStatus = "Готово"
@@ -511,6 +516,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         messages.clear()
         pendingAttachments.clear()
         currentSessionId = null
+        chatPrefs.edit().remove("current_session_id").apply()
     }
 
     fun loadSession(session: ChatSession) {
@@ -519,6 +525,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         pendingAttachments.clear()
         currentSessionId = session.id
         messages.addAll(session.messages)
+        chatPrefs.edit().putString("current_session_id", session.id).apply()
     }
 
     fun deleteSession(sessionId: String) {
@@ -539,10 +546,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             timestamp = System.currentTimeMillis(),
             messages = messages.toList()
         )
+        chatPrefs.edit().putString("current_session_id", sessionId).apply()
         persistChatsToDisk()
     }
 
-    /** Загрузка всех чатов с диска при старте. */
+    /** Загрузка всех чатов с диска при старте + восстановление последнего открытого. */
     private fun loadChatsFromDisk() {
         runCatching {
             val raw = chatPrefs.getString("sessions_json", null) ?: return
@@ -593,7 +601,64 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             sessions.clear()
             sessions.addAll(loaded.sortedByDescending { it.timestamp })
+
+            // Восстанавливаем последний открытый чат (или самый свежий)
+            val lastId = chatPrefs.getString("current_session_id", null)
+            val toOpen = sessions.firstOrNull { it.id == lastId } ?: sessions.firstOrNull()
+            if (toOpen != null) {
+                currentSessionId = toOpen.id
+                messages.clear()
+                messages.addAll(toOpen.messages)
+            }
         }
+    }
+
+    /**
+     * Достаёт из ответа ИИ файлы для скачивания.
+     * Поддерживает блоки вида:
+     * ```kotlin:Main.kt
+     * code
+     * ```
+     * или ```Main.kt / ```path/File.java
+     * APK на устройстве собрать нельзя — только исходники; сборка через GitHub Actions.
+     */
+    private fun extractDownloadableFiles(text: String): List<AttachedFile> {
+        val result = mutableListOf<AttachedFile>()
+        val regex = Regex(
+            """```([a-zA-Z0-9_+\-]*)(?::|\s+)?([^\n`]+\.\w+)?\n([\s\S]*?)```""",
+            RegexOption.MULTILINE
+        )
+        var index = 0
+        for (match in regex.findAll(text)) {
+            val lang = match.groupValues.getOrNull(1).orEmpty().trim()
+            val named = match.groupValues.getOrNull(2).orEmpty().trim()
+            val body = match.groupValues.getOrNull(3).orEmpty().trim()
+            if (body.length < 8) continue
+            val name = when {
+                named.isNotBlank() -> named.substringAfterLast('/').take(120)
+                lang in listOf("kotlin", "kt") -> "file_${index}.kt"
+                lang in listOf("java") -> "file_${index}.java"
+                lang in listOf("xml") -> "file_${index}.xml"
+                lang in listOf("gradle", "kts") -> "build.gradle.kts"
+                lang in listOf("json") -> "file_${index}.json"
+                lang in listOf("md", "markdown") -> "file_${index}.md"
+                lang in listOf("py", "python") -> "file_${index}.py"
+                lang in listOf("js", "javascript", "ts", "typescript") -> "file_${index}.js"
+                else -> "file_${index}.txt"
+            }
+            index++
+            result.add(
+                AttachedFile(
+                    id = UUID.randomUUID().toString(),
+                    name = name,
+                    contentPreview = body,
+                    sizeBytes = body.toByteArray().size.toLong(),
+                    isSavedByAi = true
+                )
+            )
+            if (result.size >= 12) break
+        }
+        return result
     }
 
     /** Сохранение всех чатов на диск. */

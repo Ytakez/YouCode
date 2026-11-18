@@ -86,47 +86,47 @@ private val DarkColorScheme = darkColorScheme(
     surfaceContainerHighest = Color(0xFF32362F)
 )
 
-// Material 3 Expressive: более крупные и «живые» скругления
+// Мягкие скругления: Material You + чистый минимализм
 private val YouCodeShapes = Shapes(
-    extraSmall = RoundedCornerShape(14.dp),
-    small = RoundedCornerShape(20.dp),
-    medium = RoundedCornerShape(28.dp),
-    large = RoundedCornerShape(36.dp),
-    extraLarge = RoundedCornerShape(48.dp)
+    extraSmall = RoundedCornerShape(12.dp),
+    small = RoundedCornerShape(16.dp),
+    medium = RoundedCornerShape(22.dp),
+    large = RoundedCornerShape(28.dp),
+    extraLarge = RoundedCornerShape(36.dp)
 )
 
-// Более чистый нейтральный фон в духе премиум AI-чатов (шрифты не трогаем)
+// Фон как у премиум AI-чата: глубокий чёрный, акценты остаются из Material You (динамический primary)
 private fun ColorScheme.withNeutralSurfaces(dark: Boolean): ColorScheme =
     if (dark) copy(
-        background = Color(0xFF121212),
-        surface = Color(0xFF121212),
-        surfaceTint = Color(0xFF121212),
-        onBackground = Color(0xFFECECEC),
-        onSurface = Color(0xFFECECEC),
-        surfaceVariant = Color(0xFF2C2C2C),
-        onSurfaceVariant = Color(0xFFB0B0B0),
-        surfaceContainerLowest = Color(0xFF0E0E0E),
-        surfaceContainerLow = Color(0xFF1A1A1A),
-        surfaceContainer = Color(0xFF1E1E1E),
-        surfaceContainerHigh = Color(0xFF262626),
-        surfaceContainerHighest = Color(0xFF2E2E2E),
-        outline = Color(0xFF6E6E6E),
-        outlineVariant = Color(0xFF333333)
+        background = Color(0xFF0A0A0A),
+        surface = Color(0xFF0A0A0A),
+        surfaceTint = Color(0xFF0A0A0A),
+        onBackground = Color(0xFFF2F2F2),
+        onSurface = Color(0xFFF2F2F2),
+        surfaceVariant = Color(0xFF1C1C1C),
+        onSurfaceVariant = Color(0xFFA8A8A8),
+        surfaceContainerLowest = Color(0xFF000000),
+        surfaceContainerLow = Color(0xFF111111),
+        surfaceContainer = Color(0xFF161616),
+        surfaceContainerHigh = Color(0xFF1C1C1C),
+        surfaceContainerHighest = Color(0xFF242424),
+        outline = Color(0xFF3D3D3D),
+        outlineVariant = Color(0xFF2A2A2A)
     ) else copy(
-        background = Color(0xFFFAFAFA),
-        surface = Color(0xFFFAFAFA),
-        surfaceTint = Color(0xFFFAFAFA),
-        onBackground = Color(0xFF1A1A1A),
-        onSurface = Color(0xFF1A1A1A),
+        background = Color(0xFFF7F7F7),
+        surface = Color(0xFFF7F7F7),
+        surfaceTint = Color(0xFFF7F7F7),
+        onBackground = Color(0xFF111111),
+        onSurface = Color(0xFF111111),
         surfaceVariant = Color(0xFFE8E8E8),
-        onSurfaceVariant = Color(0xFF5A5A5A),
+        onSurfaceVariant = Color(0xFF5C5C5C),
         surfaceContainerLowest = Color(0xFFFFFFFF),
-        surfaceContainerLow = Color(0xFFF5F5F5),
-        surfaceContainer = Color(0xFFF0F0F0),
-        surfaceContainerHigh = Color(0xFFEAEAEA),
-        surfaceContainerHighest = Color(0xFFE4E4E4),
-        outline = Color(0xFF8A8A8A),
-        outlineVariant = Color(0xFFD4D4D4)
+        surfaceContainerLow = Color(0xFFF3F3F3),
+        surfaceContainer = Color(0xFFEEEEEE),
+        surfaceContainerHigh = Color(0xFFE8E8E8),
+        surfaceContainerHighest = Color(0xFFE0E0E0),
+        outline = Color(0xFFB0B0B0),
+        outlineVariant = Color(0xFFD6D6D6)
     )
 
 @Composable

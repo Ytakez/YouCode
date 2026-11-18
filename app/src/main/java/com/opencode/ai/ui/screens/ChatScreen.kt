@@ -216,22 +216,18 @@ fun ChatScreen(
         viewModel.setWorkingFolder(uri, name, files)
     }
 
+    var pendingSaveFile by remember { mutableStateOf<AttachedFile?>(null) }
     val createDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/plain")
+        contract = ActivityResultContracts.CreateDocument("*/*")
     ) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
-        val lastSaved = viewModel.messages
-            .asReversed()
-            .flatMap { it.attachments }
-            .firstOrNull { it.isSavedByAi }
-
-        if (lastSaved != null) {
-            try {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    out.write(lastSaved.contentPreview.toByteArray())
-                }
-            } catch (_: Exception) { }
-        }
+        val file = pendingSaveFile ?: return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                out.write(file.contentPreview.toByteArray(Charsets.UTF_8))
+            }
+        } catch (_: Exception) { }
+        pendingSaveFile = null
     }
 
     LaunchedEffect(viewModel.messages.size) {
@@ -319,7 +315,7 @@ fun ChatScreen(
                         )
                         Spacer(Modifier.width(7.dp))
                         AnimatedContent(
-                            targetState = "${viewModel.currentMode.emoji} ${viewModel.currentModel.name}",
+                            targetState = viewModel.currentModel.name,
                             transitionSpec = {
                                 (fadeIn(tween(220)) + slideInVertically(spring(stiffness = 500f)) { it / 2 }) togetherWith
                                     (fadeOut(tween(120)) + slideOutVertically(spring(stiffness = 500f)) { -it / 2 })
@@ -369,7 +365,10 @@ fun ChatScreen(
                                     fromX = if (msg.isUser) 40.dp else (-40).dp,
                                     fromY = 18.dp
                                 ),
-                            onSaveFileClick = { file -> createDocumentLauncher.launch(file.name) }
+                            onSaveFileClick = { file ->
+                                pendingSaveFile = file
+                                createDocumentLauncher.launch(file.name)
+                            }
                         )
                     }
                     if (viewModel.isGenerating) {
@@ -406,8 +405,12 @@ fun ChatScreen(
         // Working folder chip
         if (viewModel.workingFolderName != null) {
             Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 4.dp)
@@ -420,7 +423,7 @@ fun ChatScreen(
                         tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("📁 ${viewModel.workingFolderName}",
+                        Text(viewModel.workingFolderName ?: "Папка",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
@@ -482,12 +485,12 @@ fun ChatScreen(
             label = "send_content"
         )
         Surface(
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = RoundedCornerShape(24.dp),
             shadowElevation = 0.dp,
             border = androidx.compose.foundation.BorderStroke(
                 1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
             ),
             modifier = Modifier
                 .fillMaxWidth()
@@ -640,10 +643,10 @@ fun ChatScreen(
 @Composable
 private fun EmptyChatState(onSuggestion: (String) -> Unit) {
     val suggestions = listOf(
-        "💡 Объясни код" to "Объясни, как работает этот код",
-        "🐞 Найди баг" to "Помоги найти баг в моём коде",
-        "📝 Напиши скрипт" to "Напиши небольшой скрипт",
-        "📁 Разбери файл" to "Разбери прикреплённый файл"
+        "Объясни код" to "Объясни, как работает этот код",
+        "Найди баг" to "Помоги найти баг в моём коде",
+        "Напиши скрипт" to "Напиши небольшой скрипт",
+        "Разбери файл" to "Разбери прикреплённый файл"
     )
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp),
@@ -712,16 +715,18 @@ private fun MessageBubble(
     ) {
         Surface(
             shape = RoundedCornerShape(
-                topStart = 24.dp, topEnd = 24.dp,
-                bottomStart = if (isUser) 24.dp else 8.dp,
-                bottomEnd = if (isUser) 8.dp else 24.dp
+                topStart = 20.dp, topEnd = 20.dp,
+                bottomStart = if (isUser) 20.dp else 6.dp,
+                bottomEnd = if (isUser) 6.dp else 20.dp
             ),
-            color = if (isUser) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceContainer,
+            // Пользователь — мягкий Material You primaryContainer
+            // ИИ — почти без фона, как в чистых AI-чатах
+            color = if (isUser) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
+            else Color.Transparent,
             tonalElevation = 0.dp,
             modifier = Modifier.widthIn(max = 360.dp).animateContentSize()
         ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Column(modifier = Modifier.padding(horizontal = if (isUser) 14.dp else 4.dp, vertical = if (isUser) 10.dp else 4.dp)) {
                 if (!isUser && message.modelName != null) {
                     Text(
                         message.modelName,

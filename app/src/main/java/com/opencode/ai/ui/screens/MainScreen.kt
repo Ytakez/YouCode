@@ -39,11 +39,16 @@ import com.opencode.ai.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
 
 enum class Screen {
-    CHAT, PROVIDERS, SKILLS_MCP, SETTINGS
+    CHAT, PROVIDERS, SKILLS_MCP, SETTINGS, ADMIN
 }
 
 @Composable
-fun MainScreen(viewModel: ChatViewModel) {
+fun MainScreen(
+    viewModel: ChatViewModel,
+    userEmail: String? = null,
+    isAdmin: Boolean = false,
+    onSignOut: () -> Unit = {}
+) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(Screen.CHAT) }
@@ -144,7 +149,19 @@ fun MainScreen(viewModel: ChatViewModel) {
                         viewModel = viewModel
                     )
                     Screen.SKILLS_MCP -> SkillsMcpScreen(onBack = { currentScreen = Screen.CHAT })
-                    Screen.SETTINGS -> SettingsScreen(onBack = { currentScreen = Screen.CHAT }, viewModel = viewModel)
+                    Screen.SETTINGS -> SettingsScreen(
+                        onBack = { currentScreen = Screen.CHAT },
+                        viewModel = viewModel,
+                        userEmail = userEmail,
+                        isAdmin = isAdmin,
+                        onSignOut = onSignOut,
+                        onAdminClick = { currentScreen = Screen.ADMIN }
+                    )
+                    Screen.ADMIN -> AdminScreen(
+                        onBack = { currentScreen = Screen.SETTINGS },
+                        viewModel = viewModel,
+                        userEmail = userEmail
+                    )
                 }
             }
 

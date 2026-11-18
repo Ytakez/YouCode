@@ -29,6 +29,19 @@ class AuthManager(private val context: Context) {
         private const val KEY_ALIAS = "youcode_auth_key"
         private const val BASE = "https://gzuzyagiqgvpeqkksaml.supabase.co"
         private const val API_KEY = "sb_publishable_gXGst8Hdc4LbcdGqMF4MbA_bwAodaTr"
+
+        /** Список email с доступом к админ-панели. Добавь свой адрес. */
+        private val ADMIN_EMAILS = setOf(
+            "admin@youcode.app",
+            "youcode.admin@gmail.com",
+            "tg7700728163-e4f5db28@gmail.com"
+        )
+
+        fun isAdminEmail(email: String?): Boolean {
+            val e = email?.trim()?.lowercase().orEmpty()
+            if (e.isBlank()) return false
+            return e in ADMIN_EMAILS || e.startsWith("admin@")
+        }
     }
 
     suspend fun signIn(email: String, password: String): AuthSession = withContext(Dispatchers.IO) {
