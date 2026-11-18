@@ -56,11 +56,17 @@ class Engine(private val context: Context) {
             .redirectOutput(dirs.log)
         builder.environment().apply {
             putAll(dirs.environment())
-            put("OPENCODE_PASSWORD", password)
+            put("OPENCODE_SERVER_PASSWORD", password)
         }
         process = builder.start()
 
-        awaitReady()
+        try {
+            awaitReady()
+        } catch (t: Throwable) {
+            // Не оставляем «полузапущенный» процесс: иначе следующий start() решит, что движок уже работает.
+            stop()
+            throw t
+        }
     }
 
     /** Первый запуск создаёт базу данных, поэтому ждём до минуты. */

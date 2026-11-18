@@ -86,7 +86,7 @@ fun AppDrawer(
         ) {
             // Brand panel
             Surface(
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier
                     .fillMaxWidth()

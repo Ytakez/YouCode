@@ -27,32 +27,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.isActive
 import android.util.Base64
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val providerPrefs = application.getSharedPreferences("providers", android.content.Context.MODE_PRIVATE)
-    private val chatPrefs = application.getSharedPreferences("chats", android.content.Context.MODE_PRIVATE)
 
-    // Stable UI model IDs are routed to real Pollinations catalog aliases.
-    // These aliases are supplied by Pollinations; the live catalog may change.
-    private val pollinationsModels = mapOf(
-        "hy4-flash-free" to "gemini-3.5-flash",
-        "iceman-free" to "mistral-4",
-        "big-pickle" to "grok",
-        "longcat-2.5-free" to "claude-fast",
-        "flint-40b-free" to "llama",
-        "nemotron-3-ultra-free" to "kimi",
-        "deepseek-v4.1-flash-free" to "deepseek",
-        "nemotron-3.5-super-vl-free" to "gemini",
-        "beam-free" to "perplexity-fast",
-        "mimo-v2.6-flash-free" to "minimax",
-        "glm-5.3-flash-free" to "glm",
-        "nemotron-3.5-lightning-free" to "qwen-coder"
-    )
-
-    var currentModel by mutableStateOf(SampleData.freeModels.first())
+    var currentModel by mutableStateOf(AiModel("", "Выбери модель", "", false, "OpenCode"))
         private set
 
     var currentMode by mutableStateOf(SampleData.smartModes.first())
@@ -78,8 +63,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var engineManaged = false
     private val engineLock = kotlinx.coroutines.sync.Mutex()
 
+    private var generationJob: Job? = null
+    @Volatile private var activeConnection: HttpURLConnection? = null
+    @Volatile private var activeAbort: (() -> Unit)? = null
+    private val sessionsFile = File(application.filesDir, "chats.json")
+    private val persistLock = kotlinx.coroutines.sync.Mutex()
+    private var chatsLoaded = false
+
     init {
-        loadChatsFromDisk()
+        // Остатки старой версии: провайдера Pollinations больше нет.
+        if (providerPrefs.getString("active_provider", "") == "pollinations") {
+            providerPrefs.edit().putString("active_provider", "opencode-server").apply()
+        }
         startEmbeddedEngine()
     }
 
@@ -120,9 +115,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        // На всякий случай сохраняем чат перед уничтожением ViewModel
-        saveSession(currentSessionId)
+        generationJob?.cancel()
         engine.stop()
+        EngineService.stop(getApplication<Application>())
         super.onCleared()
     }
 
@@ -162,13 +157,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             setRequestProperty("Authorization", "Basic $encoded")
                         }
                     }
-                    val providerRows = try {
+                    val providerRows = runCatching { try {
                         val status = integrationConnection.responseCode
                         val stream = if (status in 200..299) integrationConnection.inputStream else integrationConnection.errorStream
                         val raw = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
                         require(status in 200..299) { "OpenCode integrations HTTP $status: ${raw.take(200)}" }
                         JSONObject(raw).optJSONArray("data") ?: JSONArray()
-                    } finally { integrationConnection.disconnect() }
+                    } finally { integrationConnection.disconnect() } }.getOrDefault(JSONArray())
                     val oauthMethods = mutableMapOf<String, List<Pair<String, String>>>()
                     val providers = buildList {
                         for (i in 0 until providerRows.length()) {
@@ -237,7 +232,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (currentModel.remoteProviderId == null &&
                     providerPrefs.getString("active_provider", "") == "opencode-server"
                 ) {
-                    openCodeModels.firstOrNull { it.isFree }?.let { selectModel(it) }
+                    (openCodeModels.firstOrNull { it.isFree } ?: openCodeModels.firstOrNull())?.let { selectModel(it) }
                 }
             }
         }
@@ -337,6 +332,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var currentSessionId: String? = null
 
+    init { loadSessions() }
+
     // Pending attachments before send
     var pendingAttachments = mutableStateListOf<AttachedFile>()
         private set
@@ -350,7 +347,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val filteredModels: List<AiModel>
         get() {
-            val all = SampleData.freeModels + openCodeModels
+            val all = openCodeModels.toList()
             return if (searchQuery.isBlank()) all else all.filter {
                 it.name.contains(searchQuery, ignoreCase = true) ||
                     it.provider.contains(searchQuery, ignoreCase = true) ||
@@ -370,7 +367,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         currentModel = model
         when {
             model.remoteProviderId != null -> providerPrefs.edit().putString("active_provider", "opencode-server").apply()
-            model.provider == "Pollinations" -> providerPrefs.edit().putString("active_provider", "pollinations").apply()
         }
     }
 
@@ -425,42 +421,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
             sessions.add(0, session)
             currentSessionId = session.id
-            chatPrefs.edit().putString("current_session_id", session.id).apply()
-            persistChatsToDisk()
         }
         val sessionId = currentSessionId
+        saveSession(sessionId)
+        persistSessions()
 
         isGenerating = true
         generationActivities.clear()
         generationStatus = "Подключаюсь к модели"
         EngineService.start(getApplication<Application>())
-        viewModelScope.launch {
+        generationJob = viewModelScope.launch {
             // Если система убила встроенный движок в фоне, поднимаем его заново.
             if (engineManaged && !engine.running) runEngine()
             val providerId = providerPrefs.getString("active_provider", "").orEmpty()
             val endpoint = providerPrefs.getString("base_${providerId}", "").orEmpty().trim()
             val apiKey = providerPrefs.getString("key_${providerId}", "").orEmpty().trim()
             val remoteModel = providerPrefs.getString("model_${providerId}", "").orEmpty().trim()
-            val requestModel = if (providerId == "pollinations") pollinationsModels[currentModel.id].orEmpty() else remoteModel
+            val requestModel = remoteModel
             val protocol = providerPrefs.getString("protocol_${providerId}", "openai").orEmpty()
             generationStatus = if (providerId == "opencode-server") "Подключаюсь к OpenCode" else "Отправляю запрос провайдеру"
             val reply = if (providerId == "opencode-server" && endpoint.isNotBlank()) {
                 runCatching {
                     withContext(Dispatchers.IO) {
+                        require(currentModel.remoteProviderId != null) {
+                            "модель не выбрана: каталог OpenCode ещё не загрузился (состояние движка: ${engineState.ifBlank { "не запущен" }}). ${engineError.orEmpty()}".trim()
+                        }
                         val history = messages.dropLast(1).takeLast(8).joinToString("\n") {
                             (if (it.isUser) "Пользователь: " else "Ассистент: ") + it.content
                         }
                         val fullPrompt = buildString {
                             append("Системные инструкции: ").append(currentMode.systemHint)
                             if (history.isNotBlank()) append("\nИстория диалога:\n").append(history)
-                            append("\nПользователь: ").append(text)
+                            append("\nПользователь: ").append(text.trim())
                             attachmentsCopy.forEach { f -> append("\n\n[Файл: ").append(f.name).append("]\n").append(f.contentPreview.take(12000)) }
-                            if (workingFolderName != null) {
-                                append("\n\nРабочая папка пользователя: ").append(workingFolderName)
-                                append(". Файлы и подпапки:\n")
-                                workingFolderFiles.take(60).forEach { append("- ").append(it).append("\n") }
-                                append("Используй эти файлы, если пользователь спрашивает о проекте. Не выдумывай другие пути.")
-                            }
                         }
                         callOpenCodeServer(endpoint, apiKey, currentModel.id, fullPrompt, currentModel.remoteProviderId) { stage ->
                             viewModelScope.launch(Dispatchers.Main) { generationStatus = stage }
@@ -489,52 +482,164 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }.fold(
                     onSuccess = { it to emptyList<AttachedFile>() },
-                    onFailure = { "Ошибка облачного ИИ: ${it.message ?: "не удалось выполнить запрос"}. Проверь Base URL, API-ключ, доступность модели и баланс Pollen." to emptyList() }
+                    onFailure = { "Ошибка облачного ИИ: ${it.message ?: "не удалось выполнить запрос"}. Проверь Base URL, API-ключ и доступность модели." to emptyList() }
                 )
             } else {
                 ("ИИ не подключён. Открой «Провайдеры» и подключи OpenCode Server или укажи Base URL, API-ключ и ID модели для другого провайдера. Демонстрационные ответы отключены.") to emptyList()
             }
+            val shownModel = if (providerId == "opencode-server") currentModel.name else if (remoteModel.isNotBlank()) remoteModel else currentModel.name
+            if (!isActive) {
+                // Пользователь нажал «стоп»: текст ошибки из оборванного запроса не показываем.
+                deliverReply(sessionId, ChatMessage(
+                    id = UUID.randomUUID().toString(), content = "Генерация остановлена.", isUser = false, modelName = shownModel
+                ))
+                return@launch
+            }
             generationStatus = "Получен ответ · оформляю результат"
-            val shownModel = if (providerId == "pollinations" || providerId == "opencode-server") currentModel.name else if (remoteModel.isNotBlank()) remoteModel else currentModel.name
-            val extracted = extractDownloadableFiles(reply.first)
-            val allAttachments = (reply.second + extracted).distinctBy { it.name + it.contentPreview.take(80) }
-            messages.add(ChatMessage(
+            deliverReply(sessionId, ChatMessage(
                 id = UUID.randomUUID().toString(), content = reply.first, isUser = false,
-                modelName = shownModel, attachments = allAttachments
+                modelName = shownModel, attachments = reply.second
             ))
+        }
+        generationJob?.invokeOnCompletion {
+            // Выполняется при любом исходе (успех, ошибка, отмена): флаг и уведомление не зависают.
             isGenerating = false
             generationStatus = "Готово"
             EngineService.stop(getApplication<Application>())
-            saveSession(sessionId)
         }
+    }
 
+    /** Останавливает текущую генерацию: рвёт соединение и просит OpenCode прервать сессию. */
+    fun stopGeneration() {
+        if (!isGenerating) return
+        generationJob?.cancel()
+        val connection = activeConnection
+        val abort = activeAbort
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { abort?.invoke() }
+            runCatching { connection?.disconnect() }
+        }
+    }
+
+    /** Кладёт ответ в тот чат, из которого был запрос, даже если пользователь успел открыть другой. */
+    private fun deliverReply(sessionId: String?, msg: ChatMessage) {
+        if (sessionId == null || sessionId == currentSessionId) {
+            messages.add(msg)
+            saveSession(sessionId)
+        } else {
+            val idx = sessions.indexOfFirst { it.id == sessionId }
+            if (idx >= 0) {
+                val s = sessions[idx]
+                sessions[idx] = s.copy(lastMessage = msg.content, messages = s.messages + msg)
+            }
+        }
+        persistSessions()
+    }
+
+    /** Выход из аккаунта: стираем локальные чаты и настройки провайдеров, чтобы их не увидел следующий пользователь. */
+    fun wipeLocalData() {
+        generationJob?.cancel()
+        chatsLoaded = false
+        sessions.clear()
+        messages.clear()
+        currentSessionId = null
+        runCatching { sessionsFile.delete() }
+        providerPrefs.edit().clear().apply()
+    }
+
+    // ---- Хранение чатов на диске ----
+
+    private fun messageToJson(m: ChatMessage): JSONObject = JSONObject()
+        .put("id", m.id).put("content", m.content).put("isUser", m.isUser).put("ts", m.timestamp)
+        .put("model", m.modelName ?: JSONObject.NULL)
+        .put("attachments", JSONArray().also { arr ->
+            m.attachments.forEach { a ->
+                arr.put(JSONObject().put("id", a.id).put("name", a.name).put("uri", a.uri?.toString() ?: "")
+                    .put("mime", a.mimeType).put("size", a.sizeBytes).put("preview", a.contentPreview).put("saved", a.isSavedByAi))
+            }
+        })
+
+    private fun messageFromJson(o: JSONObject): ChatMessage {
+        val atts = o.optJSONArray("attachments") ?: JSONArray()
+        return ChatMessage(
+            id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
+            content = o.optString("content"),
+            isUser = o.optBoolean("isUser"),
+            timestamp = o.optLong("ts", System.currentTimeMillis()),
+            modelName = if (o.isNull("model")) null else o.optString("model"),
+            attachments = (0 until atts.length()).mapNotNull { i ->
+                atts.optJSONObject(i)?.let { a ->
+                    AttachedFile(
+                        id = a.optString("id").ifBlank { UUID.randomUUID().toString() },
+                        name = a.optString("name"),
+                        uri = a.optString("uri").takeIf { it.isNotBlank() }?.let { Uri.parse(it) },
+                        mimeType = a.optString("mime", "text/plain"),
+                        sizeBytes = a.optLong("size"),
+                        contentPreview = a.optString("preview"),
+                        isSavedByAi = a.optBoolean("saved")
+                    )
+                }
+            }
+        )
+    }
+
+    private fun persistSessions() {
+        if (!chatsLoaded) return
+        val snapshot = sessions.toList().take(100)
+        viewModelScope.launch(Dispatchers.IO) {
+            persistLock.withLock {
+                runCatching {
+                    val arr = JSONArray()
+                    snapshot.forEach { s ->
+                        arr.put(JSONObject().put("id", s.id).put("title", s.title).put("last", s.lastMessage).put("ts", s.timestamp)
+                            .put("messages", JSONArray().also { ma -> s.messages.forEach { ma.put(messageToJson(it)) } }))
+                    }
+                    val tmp = File(sessionsFile.path + ".tmp")
+                    tmp.writeText(arr.toString())
+                    if (!tmp.renameTo(sessionsFile)) { sessionsFile.delete(); tmp.renameTo(sessionsFile) }
+                }
+            }
+        }
+    }
+
+    private fun loadSessions() {
+        viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (!sessionsFile.exists()) emptyList<ChatSession>() else {
+                        val arr = JSONArray(sessionsFile.readText())
+                        (0 until arr.length()).mapNotNull { i ->
+                            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                            val ms = o.optJSONArray("messages") ?: JSONArray()
+                            ChatSession(
+                                id = o.optString("id").ifBlank { return@mapNotNull null },
+                                title = o.optString("title"),
+                                lastMessage = o.optString("last"),
+                                timestamp = o.optLong("ts"),
+                                messages = (0 until ms.length()).mapNotNull { j -> ms.optJSONObject(j)?.let { messageFromJson(it) } }
+                            )
+                        }
+                    }
+                }.getOrDefault(emptyList<ChatSession>())
+            }
+            val known = sessions.map { it.id }.toSet()
+            sessions.addAll(loaded.filter { it.id !in known })
+            chatsLoaded = true
+            if (sessions.isNotEmpty()) persistSessions()
+        }
     }
 
     fun newChat() {
-        // Перед созданием нового — сохраняем текущий, если есть
-        saveSession(currentSessionId)
         messages.clear()
         pendingAttachments.clear()
         currentSessionId = null
-        chatPrefs.edit().remove("current_session_id").apply()
     }
 
     fun loadSession(session: ChatSession) {
-        saveSession(currentSessionId)
         messages.clear()
         pendingAttachments.clear()
         currentSessionId = session.id
         messages.addAll(session.messages)
-        chatPrefs.edit().putString("current_session_id", session.id).apply()
-    }
-
-    fun deleteSession(sessionId: String) {
-        sessions.removeAll { it.id == sessionId }
-        if (currentSessionId == sessionId) {
-            messages.clear()
-            currentSessionId = null
-        }
-        persistChatsToDisk()
     }
 
     private fun saveSession(sessionId: String?) {
@@ -543,165 +648,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (idx < 0) return
         sessions[idx] = sessions[idx].copy(
             lastMessage = messages.lastOrNull()?.content ?: sessions[idx].lastMessage,
-            timestamp = System.currentTimeMillis(),
             messages = messages.toList()
         )
-        chatPrefs.edit().putString("current_session_id", sessionId).apply()
-        persistChatsToDisk()
-    }
-
-    /** Загрузка всех чатов с диска при старте + восстановление последнего открытого. */
-    private fun loadChatsFromDisk() {
-        runCatching {
-            val raw = chatPrefs.getString("sessions_json", null) ?: return
-            val arr = JSONArray(raw)
-            val loaded = mutableListOf<ChatSession>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val msgsArr = obj.optJSONArray("messages") ?: JSONArray()
-                val msgs = mutableListOf<ChatMessage>()
-                for (j in 0 until msgsArr.length()) {
-                    val m = msgsArr.optJSONObject(j) ?: continue
-                    val attsArr = m.optJSONArray("attachments") ?: JSONArray()
-                    val atts = mutableListOf<AttachedFile>()
-                    for (k in 0 until attsArr.length()) {
-                        val a = attsArr.optJSONObject(k) ?: continue
-                        atts.add(
-                            AttachedFile(
-                                id = a.optString("id"),
-                                name = a.optString("name"),
-                                uri = a.optString("uri").takeIf { it.isNotBlank() }?.let { android.net.Uri.parse(it) },
-                                mimeType = a.optString("mimeType", "text/plain"),
-                                sizeBytes = a.optLong("sizeBytes"),
-                                contentPreview = a.optString("contentPreview"),
-                                isSavedByAi = a.optBoolean("isSavedByAi")
-                            )
-                        )
-                    }
-                    msgs.add(
-                        ChatMessage(
-                            id = m.optString("id"),
-                            content = m.optString("content"),
-                            isUser = m.optBoolean("isUser"),
-                            timestamp = m.optLong("timestamp", System.currentTimeMillis()),
-                            modelName = m.optString("modelName").takeIf { it.isNotBlank() },
-                            attachments = atts
-                        )
-                    )
-                }
-                loaded.add(
-                    ChatSession(
-                        id = obj.optString("id"),
-                        title = obj.optString("title"),
-                        lastMessage = obj.optString("lastMessage"),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-                        messages = msgs
-                    )
-                )
-            }
-            sessions.clear()
-            sessions.addAll(loaded.sortedByDescending { it.timestamp })
-
-            // Восстанавливаем последний открытый чат (или самый свежий)
-            val lastId = chatPrefs.getString("current_session_id", null)
-            val toOpen = sessions.firstOrNull { it.id == lastId } ?: sessions.firstOrNull()
-            if (toOpen != null) {
-                currentSessionId = toOpen.id
-                messages.clear()
-                messages.addAll(toOpen.messages)
-            }
-        }
-    }
-
-    /**
-     * Достаёт из ответа ИИ файлы для скачивания.
-     * Поддерживает блоки вида:
-     * ```kotlin:Main.kt
-     * code
-     * ```
-     * или ```Main.kt / ```path/File.java
-     * APK на устройстве собрать нельзя — только исходники; сборка через GitHub Actions.
-     */
-    private fun extractDownloadableFiles(text: String): List<AttachedFile> {
-        val result = mutableListOf<AttachedFile>()
-        val regex = Regex(
-            """```([a-zA-Z0-9_+\-]*)(?::|\s+)?([^\n`]+\.\w+)?\n([\s\S]*?)```""",
-            RegexOption.MULTILINE
-        )
-        var index = 0
-        for (match in regex.findAll(text)) {
-            val lang = match.groupValues.getOrNull(1).orEmpty().trim()
-            val named = match.groupValues.getOrNull(2).orEmpty().trim()
-            val body = match.groupValues.getOrNull(3).orEmpty().trim()
-            if (body.length < 8) continue
-            val name = when {
-                named.isNotBlank() -> named.substringAfterLast('/').take(120)
-                lang in listOf("kotlin", "kt") -> "file_${index}.kt"
-                lang in listOf("java") -> "file_${index}.java"
-                lang in listOf("xml") -> "file_${index}.xml"
-                lang in listOf("gradle", "kts") -> "build.gradle.kts"
-                lang in listOf("json") -> "file_${index}.json"
-                lang in listOf("md", "markdown") -> "file_${index}.md"
-                lang in listOf("py", "python") -> "file_${index}.py"
-                lang in listOf("js", "javascript", "ts", "typescript") -> "file_${index}.js"
-                else -> "file_${index}.txt"
-            }
-            index++
-            result.add(
-                AttachedFile(
-                    id = UUID.randomUUID().toString(),
-                    name = name,
-                    contentPreview = body,
-                    sizeBytes = body.toByteArray().size.toLong(),
-                    isSavedByAi = true
-                )
-            )
-            if (result.size >= 12) break
-        }
-        return result
-    }
-
-    /** Сохранение всех чатов на диск. */
-    private fun persistChatsToDisk() {
-        runCatching {
-            val arr = JSONArray()
-            sessions.forEach { s ->
-                val msgsArr = JSONArray()
-                s.messages.forEach { m ->
-                    val attsArr = JSONArray()
-                    m.attachments.forEach { a ->
-                        attsArr.put(
-                            JSONObject()
-                                .put("id", a.id)
-                                .put("name", a.name)
-                                .put("uri", a.uri?.toString() ?: "")
-                                .put("mimeType", a.mimeType)
-                                .put("sizeBytes", a.sizeBytes)
-                                .put("contentPreview", a.contentPreview.take(50000))
-                                .put("isSavedByAi", a.isSavedByAi)
-                        )
-                    }
-                    msgsArr.put(
-                        JSONObject()
-                            .put("id", m.id)
-                            .put("content", m.content)
-                            .put("isUser", m.isUser)
-                            .put("timestamp", m.timestamp)
-                            .put("modelName", m.modelName ?: "")
-                            .put("attachments", attsArr)
-                    )
-                }
-                arr.put(
-                    JSONObject()
-                        .put("id", s.id)
-                        .put("title", s.title)
-                        .put("lastMessage", s.lastMessage)
-                        .put("timestamp", s.timestamp)
-                        .put("messages", msgsArr)
-                )
-            }
-            chatPrefs.edit().putString("sessions_json", arr.toString()).apply()
-        }
     }
 
 
@@ -716,11 +664,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             "Адрес сервера должен начинаться с http:// или https://"
         }
 
-        fun request(path: String, body: JSONObject? = null): JSONObject {
+        fun request(path: String, body: JSONObject? = null, method: String? = null, readTimeoutMs: Int = 180000): JSONObject {
             val connection = (URL("$root/$path").openConnection() as HttpURLConnection).apply {
-                requestMethod = if (body == null) "GET" else "POST"
+                requestMethod = method ?: if (body == null) "GET" else "POST"
                 connectTimeout = 15000
-                readTimeout = 180000
+                readTimeout = readTimeoutMs
                 setRequestProperty("Accept", "application/json")
                 if (body != null) {
                     doOutput = true
@@ -731,6 +679,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     setRequestProperty("Authorization", "Basic $encoded")
                 }
             }
+            activeConnection = connection
             try {
                 if (body != null) connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
                 val status = connection.responseCode
@@ -747,6 +696,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return if (raw.isBlank()) JSONObject() else JSONObject(raw)
             } finally {
+                if (activeConnection === connection) activeConnection = null
                 connection.disconnect()
             }
         }
@@ -780,13 +730,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // Subscribe to OpenCode's real event stream before sending the prompt.
         // This surfaces actual tool calls (shell/read/edit/etc.), not fabricated "thinking" text.
-        val eventJob = listenOpenCodeEvents(root, password, sessionId)
+        activeAbort = { runCatching { request("api/session/${enc(sessionId)}/abort", JSONObject(), readTimeoutMs = 10000) } }
+        val eventConnection = AtomicReference<HttpURLConnection?>(null)
+        val eventJob = listenOpenCodeEvents(root, password, sessionId, eventConnection)
         try {
         val messageBody = JSONObject()
             .put("model", JSONObject().put("providerID", providerId).put("id", modelId))
             .put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", prompt)))
         onStage("Модель обрабатывает запрос")
-        val response = request("api/session/${enc(sessionId)}/message", messageBody)
+        // Агентные задачи могут идти долго: ждём ответ до 30 минут, а не 3.
+        val response = request("api/session/${enc(sessionId)}/message", messageBody, readTimeoutMs = 30 * 60 * 1000)
         onStage("Получаю результат модели")
         val parts = response.optJSONArray("parts")
             ?: response.optJSONObject("data")?.optJSONArray("parts")
@@ -804,14 +757,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         } finally {
             eventJob.cancel()
+            runCatching { eventConnection.get()?.disconnect() }
+            activeAbort = null
+            // Каждый запрос создаёт отдельную сессию OpenCode: удаляем её, чтобы они не копились в базе.
+            runCatching { request("api/session/${enc(sessionId)}", method = "DELETE", readTimeoutMs = 15000) }
         }
     }
 
-    private fun listenOpenCodeEvents(root: String, password: String, sessionId: String): Job = viewModelScope.launch(Dispatchers.IO) {
+    private fun listenOpenCodeEvents(root: String, password: String, sessionId: String, connectionRef: AtomicReference<HttpURLConnection?>): Job = viewModelScope.launch(Dispatchers.IO) {
         val connection = (URL("$root/event").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10000
-            readTimeout = 5000
+            readTimeout = 120000
             setRequestProperty("Accept", "text/event-stream")
             setRequestProperty("Cache-Control", "no-cache")
             if (password.isNotBlank()) {
@@ -819,6 +776,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 setRequestProperty("Authorization", "Basic $encoded")
             }
         }
+        connectionRef.set(connection)
+        if (!isActive) { connection.disconnect(); return@launch }
         try {
             if (connection.responseCode !in 200..299) return@launch
             val listenerJob = currentCoroutineContext()[Job]
@@ -889,10 +848,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 append("\n\n[Файл: ${file.name}]\n")
                 append(file.contentPreview.takeIf { it.isNotBlank() }?.take(20000) ?: "Содержимое файла недоступно для текстового API.")
             }
-            if (workingFolderName != null) {
-                append("\n\nРабочая папка пользователя: $workingFolderName.\nФайлы и подпапки (используй только их, не выдумывай другие пути):\n")
-                workingFolderFiles.take(50).forEach { append("- $it\n") }
-            }
+            if (workingFolderName != null) append("\n\nРабочая папка: $workingFolderName. Файлы: ${workingFolderFiles.take(30).joinToString()}")
         }
         val body = JSONObject()
             .put("model", model)
@@ -952,8 +908,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 else append("Содержимое файла недоступно для текстового API.")
             }
             if (workingFolderName != null) {
-                append("\n\nРабочая папка пользователя: $workingFolderName.\nФайлы и подпапки (используй только их, не выдумывай другие пути):\n")
-                workingFolderFiles.take(50).forEach { append("- $it\n") }
+                append("\n\nРабочая папка: $workingFolderName. Файлы: ${workingFolderFiles.take(30).joinToString()}")
             }
         }
         val messagesJson = JSONArray()

@@ -64,7 +64,7 @@ data class McpServer(
 data class SmartMode(
     val id: String,
     val name: String,
-    val emoji: String,
+    val emoji: String, // kept for compatibility, intentionally empty for a serious UI
     val description: String,
     val preferredModelIds: List<String>,
     val systemHint: String
@@ -76,111 +76,94 @@ object SampleData {
         SmartMode(
             "auto", "Авто", "",
             "Сам выбирает модель под задачу",
-            listOf("deepseek-v4.1-flash-free", "hy4-flash-free", "big-pickle"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Универсальный помощник. Подстраивайся под задачу. Не выдумывай пути к файлам — используй только то, что указано в рабочей папке. Не используй эмодзи в ответах."
+            emptyList(),
+            "Ты универсальный помощник. Подстраивайся под задачу."
         ),
         SmartMode(
             "code", "Программирование", "",
             "Лучшие модели для кода. При лимите — следующая",
-            listOf("deepseek-v4.1-flash-free", "flint-40b-free", "glm-5.3-flash-free", "hy4-flash-free"),
-            "Ты — YouCode, AI-помощник по программированию, встроенный в приложение YouCode (на базе OpenCode). Senior-разработчик. Пиши чистый код, объясняй кратко, предлагай лучшие практики. Не выдумывай пути к файлам — используй только то, что указано в рабочей папке. Когда отдаёшь файлы, используй блоки кода с именем файла: ```kotlin:Main.kt. Не используй эмодзи."
+            emptyList(),
+            "Ты senior-разработчик. Пиши чистый код, объясняй кратко, предлагай лучшие практики."
         ),
         SmartMode(
             "study", "Учёба", "",
             "Объяснения, конспекты, подготовка к экзаменам",
-            listOf("longcat-2.5-free", "nemotron-3.5-super-vl-free", "hy4-flash-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Терпеливый преподаватель. Объясняй просто, с примерами, проверяй понимание. Не используй эмодзи."
+            emptyList(),
+            "Ты терпеливый преподаватель. Объясняй просто, с примерами, проверяй понимание."
         ),
         SmartMode(
             "design", "Дизайн", "",
             "UI/UX, цвета, типографика, макеты",
-            listOf("big-pickle", "beam-free", "iceman-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Продуктовый дизайнер. Думай о иерархии, доступности, трендах Material Design 3. Не используй эмодзи."
+            emptyList(),
+            "Ты продуктовый дизайнер. Думай о иерархии, доступности, трендах Material Design 3."
         ),
         SmartMode(
             "write", "Тексты", "",
             "Статьи, посты, письма, сценарии",
-            listOf("longcat-2.5-free", "hy4-flash-free", "iceman-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Сильный редактор и копирайтер. Пиши ясно, живо, без воды. Не используй эмодзи."
+            emptyList(),
+            "Ты сильный редактор и копирайтер. Пиши ясно, живо, без воды."
         ),
         SmartMode(
             "translate", "Перевод", "",
             "Точный перевод и адаптация",
-            listOf("hy4-flash-free", "longcat-2.5-free", "deepseek-v4.1-flash-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Профессиональный переводчик. Сохраняй смысл и стиль оригинала. Не используй эмодзи."
+            emptyList(),
+            "Ты профессиональный переводчик. Сохраняй смысл и стиль оригинала."
         ),
         SmartMode(
             "math", "Математика", "",
             "Задачи, формулы, пошаговые решения",
-            listOf("deepseek-v4.1-flash-free", "flint-40b-free", "nemotron-3.5-lightning-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Математик. Решай пошагово, проверяй ответ, объясняй логику. Не используй эмодзи."
+            emptyList(),
+            "Ты математик. Решай пошагово, проверяй ответ, объясняй логику."
         ),
         SmartMode(
             "business", "Бизнес", "",
             "Стратегия, аналитика, презентации",
-            listOf("big-pickle", "longcat-2.5-free", "hy4-flash-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Бизнес-консультант. Думай структурированно, давай actionable советы. Не используй эмодзи."
+            emptyList(),
+            "Ты бизнес-консультант. Думай структурированно, давай actionable советы."
         ),
         SmartMode(
             "creative", "Креатив", "",
             "Идеи, истории, брейншторм",
-            listOf("beam-free", "iceman-free", "iceman-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Креативный директор. Предлагай неожиданные идеи, развивай образы. Не используй эмодзи."
+            emptyList(),
+            "Ты креативный директор. Предлагай неожиданные идеи, развивай образы."
         ),
         SmartMode(
             "research", "Исследование", "",
             "Поиск фактов, сравнение, анализ",
-            listOf("nemotron-3.5-super-vl-free", "deepseek-v4.1-flash-free", "longcat-2.5-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Исследователь. Опирайся на факты, сравнивай источники, указывай неопределённость. Не используй эмодзи."
+            emptyList(),
+            "Ты исследователь. Опирайся на факты, сравнивай источники, указывай неопределённость."
         ),
         SmartMode(
             "legal", "Документы", "",
             "Договоры, заявления, формальные тексты",
-            listOf("longcat-2.5-free", "hy4-flash-free", "glm-5.3-flash-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Помогаешь с формальными документами. Пиши чётко и структурированно. Это не юрконсультация. Не используй эмодзи."
+            emptyList(),
+            "Ты помогаешь с формальными документами. Пиши чётко и структурированно. Это не юрконсультация."
         ),
         SmartMode(
             "health", "Здоровье", "",
             "Общая информация о ЗОЖ (не медицина)",
-            listOf("nemotron-3.5-super-vl-free", "hy4-flash-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Давай общую информацию о здоровье и ЗОЖ. Всегда напоминай обратиться к врачу. Не используй эмодзи."
+            emptyList(),
+            "Давай общую информацию о здоровье и ЗОЖ. Всегда напоминай обратиться к врачу."
         ),
         SmartMode(
             "travel", "Путешествия", "",
             "Маршруты, советы, чек-листы",
-            listOf("beam-free", "big-pickle", "hy4-flash-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Эксперт по путешествиям. Помогай с маршрутами, бюджетом и практическими советами. Не используй эмодзи."
+            emptyList(),
+            "Ты travel-эксперт. Помогай с маршрутами, бюджетом и практическими советами."
         ),
         SmartMode(
             "fast", "Быстрый ответ", "",
             "Коротко и по делу, минимальный расход",
-            listOf("hy4-flash-free", "iceman-free", "mimo-v2.6-flash-free"),
-            "Ты — YouCode, AI-помощник, встроенный в приложение YouCode (на базе OpenCode). Отвечай максимально кратко и по делу. Не используй эмодзи."
+            emptyList(),
+            "Отвечай максимально кратко и по делу."
         ),
     )
-
-    val freeModels = listOf(
-        AiModel("hy4-flash-free", "Pollinations · Gemini Flash", "1M", false, "Pollinations"),
-        AiModel("iceman-free", "Pollinations · Mistral", "262k", false, "Pollinations"),
-        AiModel("big-pickle", "Pollinations · Grok", "1M", false, "Pollinations"),
-        AiModel("longcat-2.5-free", "Pollinations · Claude", "1M", false, "Pollinations"),
-        AiModel("flint-40b-free", "Pollinations · Llama", "262k", false, "Pollinations"),
-        AiModel("nemotron-3-ultra-free", "Pollinations · Kimi", "1M", false, "Pollinations"),
-        AiModel("deepseek-v4.1-flash-free", "Pollinations · DeepSeek", "200k", false, "Pollinations"),
-        AiModel("nemotron-3.5-super-vl-free", "Pollinations · Gemini", "1M", false, "Pollinations"),
-        AiModel("beam-free", "Pollinations · Perplexity", "1M", false, "Pollinations"),
-        AiModel("mimo-v2.6-flash-free", "Pollinations · MiniMax", "200k", false, "Pollinations"),
-        AiModel("glm-5.3-flash-free", "Pollinations · GLM", "200k", false, "Pollinations"),
-        AiModel("nemotron-3.5-lightning-free", "Pollinations · Qwen Coder", "1M", false, "Pollinations"),
-    )
-
 
     val providers = listOf(
         ProviderItem("opencode-server", "OpenCode (встроенный или свой сервер)", "Встроенный OpenCode запускается в приложении сам и даёт бесплатные модели без ключей. Можно указать адрес внешнего сервера.", "opencode-server"),
         ProviderItem("opencode-go", "OpenCode Go", "Подписка opencode: Kimi, GLM, DeepSeek, Qwen, MiniMax и другие открытые модели за фиксированную цену.", "opencode"),
         ProviderItem("opencode-zen", "OpenCode Zen", "Аккаунт opencode: бесплатные модели, а с балансом все модели Zen, включая Claude, GPT и Gemini.", "opencode"),
         ProviderItem("claude", "Claude", "Подписка Claude Pro или Max через официальный Claude Code.", "opencode"),
-        ProviderItem("pollinations", "Pollinations AI (12 моделей)", "12 вариантов моделей через единый Pollinations API. Нужен API-ключ Pollinations; расходуются Pollen-кредиты.", "key", true),
         ProviderItem("custom-cloud", "Свой Cloud / API", "Любой OpenAI-совместимый API: вставь домен, ключ и модель", "key", true),
         ProviderItem("302ai", "302.AI", "API-ключ", "key", true),
         ProviderItem("50x", "50X", "API-ключ", "key", true),

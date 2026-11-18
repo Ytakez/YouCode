@@ -4,6 +4,11 @@ package com.opencode.ai.ui.screens
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.opencode.ai.ui.theme.entrance
+import com.opencode.ai.ui.theme.pressScale
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,14 +25,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -41,27 +47,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencode.ai.data.SampleData
 import com.opencode.ai.data.SmartMode
-import com.opencode.ai.ui.theme.entrance
-import com.opencode.ai.ui.theme.pressScale
 import com.opencode.ai.viewmodel.ChatViewModel
 
 @Composable
-fun SettingsScreen(
-    onBack: () -> Unit,
-    viewModel: ChatViewModel? = null,
-    userEmail: String? = null,
-    isAdmin: Boolean = false,
-    onSignOut: () -> Unit = {},
-    onAdminClick: () -> Unit = {}
-) {
+fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignOut: (() -> Unit)? = null) {
     var showModePicker by remember { mutableStateOf(false) }
-    var showLogoutConfirm by remember { mutableStateOf(false) }
+    var showSignOutDialog by remember { mutableStateOf(false) }
     val currentMode = viewModel?.currentMode
     val haptic = LocalHapticFeedback.current
 
@@ -80,183 +75,105 @@ fun SettingsScreen(
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxSize().padding(padding)
+                .verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (!userEmail.isNullOrBlank()) {
-                Text(
-                    "Аккаунт",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(userEmail, fontWeight = FontWeight.Medium)
-                        Text(
-                            if (isAdmin) "Администратор" else "Пользователь",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
+            Text("Персонализация", style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.entrance(0))
+            Text("Выбери, как YouCode будет подбирать модель для ответов.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            Text(
-                "Режим работы",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold
-            )
             Surface(
                 onClick = { showModePicker = true },
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f)),
-                modifier = Modifier.fillMaxWidth().pressScale(0.97f)
+                modifier = Modifier.fillMaxWidth().entrance(1).pressScale(0.97f).animateContentSize()
             ) {
                 Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            currentMode?.name ?: "Выбрать режим",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            currentMode?.description ?: "Нажмите, чтобы выбрать",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        Icon(
+                            Icons.Outlined.Tune,
+                            contentDescription = null,
+                            modifier = Modifier.padding(12.dp).size(24.dp),
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
                         )
                     }
-                    Icon(Icons.Default.ExpandMore, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Режим работы", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(currentMode?.name ?: "Выбрать режим", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        Text(currentMode?.description ?: "Нажми, чтобы выбрать", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Icon(Icons.Default.ExpandMore, contentDescription = "Выбрать режим", tint = MaterialTheme.colorScheme.primary)
                 }
             }
 
-            Text(
-                "Текущая модель",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold
-            )
+            Text("Текущая модель", style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 12.dp).entrance(2))
             Surface(
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().entrance(3)
             ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(12.dp))
                     Column {
                         Text(viewModel?.currentModel?.name ?: "Модель не выбрана", fontWeight = FontWeight.Medium)
-                        Text(
-                            viewModel?.currentModel?.provider ?: "Выберите модель в меню чата",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Text(viewModel?.currentModel?.provider ?: "Выбери модель в меню чата",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
 
-            Text(
-                "Оформление",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.SemiBold
-            )
+            Spacer(Modifier.height(12.dp))
+            Text("Оформление", style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.entrance(4))
             Surface(
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().entrance(5)
             ) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("Material You", fontWeight = FontWeight.Medium)
-                    Text(
-                        "Динамические цвета системы и нейтральные поверхности.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("Material Design 3", fontWeight = FontWeight.Medium)
+                    Text("Нейтральные поверхности в духе Grok, динамические акценты системы.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-
-            if (isAdmin) {
-                Text(
-                    "Администрирование",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Surface(
-                    onClick = onAdminClick,
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f)),
-                    modifier = Modifier.fillMaxWidth().pressScale(0.97f)
-                ) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Outlined.AdminPanelSettings,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text("Админ-панель", fontWeight = FontWeight.Medium)
-                            Text(
-                                "Сессии, статистика, служебные действия",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
+            if (onSignOut != null) {
+                OutlinedButton(
+                    onClick = { showSignOutDialog = true },
+                    modifier = Modifier.fillMaxWidth().entrance(6)
+                ) { Text("Выйти из аккаунта") }
             }
-
-            Spacer(Modifier.height(8.dp))
-            Surface(
-                onClick = { showLogoutConfirm = true },
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
-                modifier = Modifier.fillMaxWidth().pressScale(0.97f)
-            ) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.AutoMirrored.Outlined.Logout,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        "Выйти из аккаунта",
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-
-            Text(
-                "YouCode · версия ${com.opencode.ai.BuildConfig.VERSION_NAME}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)
-            )
+            Text("YouCode · версия ${com.opencode.ai.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp, bottom = 24.dp))
         }
+    }
+
+    if (showSignOutDialog && onSignOut != null) {
+        AlertDialog(
+            onDismissRequest = { showSignOutDialog = false },
+            title = { Text("Выйти из аккаунта?") },
+            text = { Text("Чаты и настройки провайдеров на этом устройстве будут удалены.") },
+            confirmButton = { TextButton(onClick = { showSignOutDialog = false; onSignOut() }) { Text("Выйти") } },
+            dismissButton = { TextButton(onClick = { showSignOutDialog = false }) { Text("Отмена") } },
+            shape = RoundedCornerShape(20.dp)
+        )
     }
 
     if (showModePicker) {
         AlertDialog(
             onDismissRequest = { showModePicker = false },
-            title = { Text("Режим работы") },
+            title = { Text("Выбери режим") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     SampleData.smartModes.forEach { mode ->
@@ -269,25 +186,7 @@ fun SettingsScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { showModePicker = false }) { Text("Закрыть") } },
-            shape = RoundedCornerShape(24.dp)
-        )
-    }
-
-    if (showLogoutConfirm) {
-        AlertDialog(
-            onDismissRequest = { showLogoutConfirm = false },
-            title = { Text("Выйти?") },
-            text = { Text("Сессия будет завершена. Чаты на этом устройстве останутся.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showLogoutConfirm = false
-                    onSignOut()
-                }) { Text("Выйти") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showLogoutConfirm = false }) { Text("Отмена") }
-            },
-            shape = RoundedCornerShape(24.dp)
+            shape = RoundedCornerShape(20.dp)
         )
     }
 }
@@ -295,24 +194,19 @@ fun SettingsScreen(
 @Composable
 private fun ModeOption(mode: SmartMode, selected: Boolean, onClick: () -> Unit) {
     val container by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.secondaryContainer
-        else MaterialTheme.colorScheme.surfaceContainerLow,
+        targetValue = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
         animationSpec = spring(stiffness = 400f),
         label = "mode_option_color"
     )
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
+    Surface(onClick = onClick, shape = RoundedCornerShape(12.dp),
         color = container,
-        modifier = Modifier.fillMaxWidth().pressScale(0.96f)
-    ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Text(mode.name, fontWeight = FontWeight.SemiBold)
-            Text(
-                mode.description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        modifier = Modifier.fillMaxWidth().pressScale(0.97f)) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(mode.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(mode.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            RadioButton(selected = selected, onClick = onClick)
         }
     }
 }

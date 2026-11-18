@@ -20,6 +20,16 @@ class EngineService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onDestroy() {
+        active = false
+        super.onDestroy()
+    }
+
+    /** Android 15: у foreground-сервиса типа dataSync лимит ~6 часов, по сигналу нужно остановиться. */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         ensureChannel()
         val notification = buildNotification()
@@ -53,12 +63,11 @@ class EngineService : Service() {
     companion object {
         private const val CHANNEL_ID = "work"
         private const val NOTIFICATION_ID = 1
-        private var active = false
+        @Volatile private var active = false
 
         fun start(context: Context) {
             if (active) return
-            active = true
-            runCatching { context.startForegroundService(Intent(context, EngineService::class.java)) }
+            active = runCatching { context.startForegroundService(Intent(context, EngineService::class.java)) }.isSuccess
         }
 
         fun stop(context: Context) {

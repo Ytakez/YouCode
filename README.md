@@ -1,6 +1,6 @@
 # YouCode
 
-Премиум Android-чат с ИИ (Material Design 3).  
+Премиум Android-чат с ИИ. Интерфейс в духе Grok на основе Material Design 3: нейтральные поверхности, спокойные акценты, без лишних декораций и смайликов.  
 Бесплатные модели работают сразу. Можно прикреплять и сохранять файлы.
 
 ---
@@ -36,22 +36,17 @@
 
 Если Actions не запустился автоматически — зайди в Actions и нажми **Run workflow**.
 
-## Material You / Dynamic Color
+## Дизайн (Grok + Material Design 3)
 
-Интерфейс использует системную светлую или тёмную тему Android. На Android 12 и новее палитра YouCode автоматически берётся из цветов обоев через Jetpack Compose Material 3 Dynamic Color. На более старых версиях Android используется встроенная светлая или тёмная палитра.
+Интерфейс вдохновлён спокойным тёмным стилем Grok, но построен на Material Design 3.
 
-Цвета поверхностей, контейнеров, выделения, полей ввода и элементов навигации привязаны к `MaterialTheme.colorScheme`, а форма компонентов задаётся общей шкалой скруглений в `ui/theme/Theme.kt`.
+- Нейтральные почти чёрные поверхности в тёмной теме и чистые светлые — в светлой.
+- Акценты (кнопки, выделения) могут браться из системной палитры Material You на Android 12+.
+- Скругления умеренные, без «пузырчатого» Expressive-стиля.
+- Без смайликов в режимах, подсказках и чипах.
+- Пустое состояние чата — простой иконкой и текстом, без морфинг-анимаций.
 
-
-## Material 3 Expressive refresh
-
-- Динамическая палитра Android 12+ берётся из системных цветов обоев и повторно считывается при возвращении приложения на передний план.
-- Переходы между основными экранами и открытие выбора модели используют плавные spring-анимации.
-- Карточки и списки появляются с лёгкой последовательной анимацией; сообщения и раскрывающиеся элементы плавно меняют размер.
-- Скругления и поверхности приведены к более выразительной системе Material 3 Expressive.
-- Для Android 11 и ниже сохраняется встроенная светлая/тёмная палитра.
-
-Визуальный стиль вдохновлён Material 3 Expressive, который Google описывает как развитие Material You. Это не отдельный Android 17 API: динамические цвета предоставляются Android 12+, а внешний вид реализован средствами Jetpack Compose Material 3.
+Цвета и формы задаются в `ui/theme/Theme.kt`. На Android 11 и ниже используется встроенная палитра.
 
 ## Подключение собственного облачного ИИ
 
@@ -97,18 +92,6 @@ OPENCODE_PASSWORD='замените-на-длинный-пароль' opencode s
 
 Не открывайте порт 4096 напрямую в интернет. Для удалённого доступа используйте защищённый туннель/официальное pairing OpenCode. API-подключение требует работающего компьютера/сервера с OpenCode; один только ZIP не может предоставить бесплатные вычисления.
 
-
-## Pollinations API integration
-
-The 12 model choices in the app are routed through the Pollinations OpenAI-compatible API:
-`https://gen.pollinations.ai/v1`.
-
-1. Open **Providers** in the app.
-2. Select **Pollinations AI (12 моделей)**.
-3. Create a secret API key at https://enter.pollinations.ai and paste it into the API-key field.
-4. Save the provider, then choose any of the 12 Pollinations-labelled models in the model picker.
-
-The app maps its 12 stable model choices to Pollinations model aliases. Pollinations may change its live model catalog, aliases, access rules, and pricing. API use requires a Pollinations key and consumes the account's Pollen credits; this integration does **not** promise unlimited or permanently free inference. Check the Pollinations dashboard before use.
 
 ## Каталог OpenCode (live)
 
@@ -168,7 +151,6 @@ The redesign changes presentation only; existing chat, provider, model, and sett
 - Нужен Android 9+ и arm64 (`minSdk` = 28).
 - При старте приложение само подключает встроенный сервер и выбирает бесплатную модель.
   Если в «Провайдерах» указан внешний сервер, он остаётся приоритетным.
-- Модели «Pollinations» требуют ключ и не помечены как бесплатные.
 - У бесплатных моделей OpenCode есть лимит использования, судя по всему, он считается по IP-адресу.
 - Пока идёт ответ, работает уведомление-сервис, чтобы система не замораживала приложение.
 - Документация по встраиванию opencode в JS-приложения (`@opencode/sdk`) здесь не используется:
@@ -184,10 +166,6 @@ See `SUPABASE_SETUP.md` and run `supabase/setup.sql` in the Supabase SQL Editor.
 
 ## Вход по электронной почте (Supabase)
 
-В версии 1.3.5 добавлены экраны входа и регистрации через Supabase Auth. Перед сборкой APK откройте Supabase → Authentication → Providers → Email и включите Email provider. Если включено подтверждение почты, после регистрации приложение просит ввести код из письма (в версии 1.3.6 вместо ссылки; код можно отправить повторно). Для этого в Supabase нужен свой SMTP и шаблон письма с `{{ .Token }}` — см. `SUPABASE_SETUP.md` и `supabase/email-template-confirm-signup.html`.
+В версии 1.3.5 добавлены экраны входа и регистрации через Supabase Auth. Перед сборкой APK откройте Supabase → Authentication → Providers → Email и включите Email provider. Если включено подтверждение почты, после регистрации пользователь должен перейти по ссылке из письма и затем войти в приложение.
 
 В приложении токены сессии сохраняются в зашифрованном виде с использованием Android Keystore. Публичный publishable key используется на клиенте; секретный service_role ключ в приложение добавлять нельзя.
-
-В версии 1.3.7 переработан экран входа: приветствие «Добро пожаловать в YouCode» с кнопкой «Войти по почте» внизу, затем отдельные экраны почты/пароля и ввода кода из письма.
-
-В версии 1.3.8 добавлен вход через Telegram (кнопка «Войти через Telegram» на экране приветствия): работает без почты и SMTP через Edge Function `telegram-auth`. Настройка — в `SUPABASE_SETUP.md`, SQL — `supabase/telegram.sql`.

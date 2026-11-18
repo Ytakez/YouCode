@@ -30,103 +30,112 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.compose.foundation.shape.RoundedCornerShape
 
+/**
+ * Grok-inspired serious palette on top of Material Design 3.
+ * Cool neutrals, high contrast, restrained accents. Dynamic color
+ * still works on Android 12+, but surfaces stay deliberately neutral.
+ */
+
 private val LightColorScheme = lightColorScheme(
-    primary = Color(0xFF52634A),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFD5E8C8),
-    onPrimaryContainer = Color(0xFF101F0D),
-    secondary = Color(0xFF58624F),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFDCE7D0),
-    onSecondaryContainer = Color(0xFF151E10),
-    tertiary = Color(0xFF38666A),
-    onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFBCEBED),
-    onTertiaryContainer = Color(0xFF002022),
-    background = Color(0xFFF8FAF3),
-    onBackground = Color(0xFF191D17),
-    surface = Color(0xFFF8FAF3),
-    onSurface = Color(0xFF191D17),
-    surfaceVariant = Color(0xFFE1E4D9),
-    onSurfaceVariant = Color(0xFF44483F),
-    outline = Color(0xFF74796D),
-    outlineVariant = Color(0xFFC4C8BC),
+    primary = Color(0xFF2F4A7A),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFD6E3FF),
+    onPrimaryContainer = Color(0xFF001B3D),
+    secondary = Color(0xFF545F70),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFD8E3F8),
+    onSecondaryContainer = Color(0xFF111C2B),
+    tertiary = Color(0xFF6B5778),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFF2DAFF),
+    onTertiaryContainer = Color(0xFF251431),
+    background = Color(0xFFF8F9FC),
+    onBackground = Color(0xFF1A1C1E),
+    surface = Color(0xFFF8F9FC),
+    onSurface = Color(0xFF1A1C1E),
+    surfaceVariant = Color(0xFFE1E2EC),
+    onSurfaceVariant = Color(0xFF44474F),
+    outline = Color(0xFF74777F),
+    outlineVariant = Color(0xFFC4C6D0),
     surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFF2F5EC),
-    surfaceContainer = Color(0xFFECEFE6),
-    surfaceContainerHigh = Color(0xFFE6E9E0),
-    surfaceContainerHighest = Color(0xFFE1E4DB)
+    surfaceContainerLow = Color(0xFFF2F3F7),
+    surfaceContainer = Color(0xFFECEDF1),
+    surfaceContainerHigh = Color(0xFFE6E8EC),
+    surfaceContainerHighest = Color(0xFFE1E2E6)
 )
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Color(0xFFB9D0AA),
-    onPrimary = Color(0xFF25351F),
-    primaryContainer = Color(0xFF3B4B34),
-    onPrimaryContainer = Color(0xFFD5E8C8),
-    secondary = Color(0xFFC0CCB4),
-    onSecondary = Color(0xFF2A3324),
-    secondaryContainer = Color(0xFF414B3A),
-    onSecondaryContainer = Color(0xFFDCE7D0),
-    tertiary = Color(0xFFA0CFD1),
-    onTertiary = Color(0xFF003739),
-    tertiaryContainer = Color(0xFF1E4D50),
-    onTertiaryContainer = Color(0xFFBCEBED),
-    background = Color(0xFF11140F),
-    onBackground = Color(0xFFE2E5DA),
-    surface = Color(0xFF11140F),
-    onSurface = Color(0xFFE2E5DA),
-    surfaceVariant = Color(0xFF42483D),
-    onSurfaceVariant = Color(0xFFC2C8B9),
-    outline = Color(0xFF8C9283),
-    outlineVariant = Color(0xFF42483D),
-    surfaceContainerLowest = Color(0xFF0B0F0A),
-    surfaceContainerLow = Color(0xFF191D17),
-    surfaceContainer = Color(0xFF1D211B),
-    surfaceContainerHigh = Color(0xFF272B25),
-    surfaceContainerHighest = Color(0xFF32362F)
+    primary = Color(0xFFA8C7FF),
+    onPrimary = Color(0xFF002F65),
+    primaryContainer = Color(0xFF1E3A6E),
+    onPrimaryContainer = Color(0xFFD6E3FF),
+    secondary = Color(0xFFBCC7DB),
+    onSecondary = Color(0xFF263141),
+    secondaryContainer = Color(0xFF3C4758),
+    onSecondaryContainer = Color(0xFFD8E3F8),
+    tertiary = Color(0xFFD6BEE4),
+    onTertiary = Color(0xFF3B2948),
+    tertiaryContainer = Color(0xFF523F5F),
+    onTertiaryContainer = Color(0xFFF2DAFF),
+    background = Color(0xFF0B0C0E),
+    onBackground = Color(0xFFE2E2E6),
+    surface = Color(0xFF0B0C0E),
+    onSurface = Color(0xFFE2E2E6),
+    surfaceVariant = Color(0xFF44474F),
+    onSurfaceVariant = Color(0xFFC4C6D0),
+    outline = Color(0xFF8E9099),
+    outlineVariant = Color(0xFF44474F),
+    surfaceContainerLowest = Color(0xFF060708),
+    surfaceContainerLow = Color(0xFF141516),
+    surfaceContainer = Color(0xFF1A1B1D),
+    surfaceContainerHigh = Color(0xFF242528),
+    surfaceContainerHighest = Color(0xFF2F3033)
 )
 
-// Мягкие скругления: Material You + чистый минимализм
+/** Slightly tighter radii than the previous expressive set — cleaner, more serious. */
 private val YouCodeShapes = Shapes(
-    extraSmall = RoundedCornerShape(12.dp),
-    small = RoundedCornerShape(16.dp),
-    medium = RoundedCornerShape(22.dp),
-    large = RoundedCornerShape(28.dp),
-    extraLarge = RoundedCornerShape(36.dp)
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(20.dp),
+    extraLarge = RoundedCornerShape(28.dp)
 )
 
-// Фон как у премиум AI-чата: глубокий чёрный, акценты остаются из Material You (динамический primary)
+/**
+ * Forces neutral surfaces so the UI stays close to Grok's calm dark look
+ * even when dynamic color pulls strong hues from the wallpaper.
+ */
 private fun ColorScheme.withNeutralSurfaces(dark: Boolean): ColorScheme =
     if (dark) copy(
-        background = Color(0xFF0A0A0A),
-        surface = Color(0xFF0A0A0A),
-        surfaceTint = Color(0xFF0A0A0A),
-        onBackground = Color(0xFFF2F2F2),
-        onSurface = Color(0xFFF2F2F2),
-        surfaceVariant = Color(0xFF1C1C1C),
-        onSurfaceVariant = Color(0xFFA8A8A8),
-        surfaceContainerLowest = Color(0xFF000000),
-        surfaceContainerLow = Color(0xFF111111),
-        surfaceContainer = Color(0xFF161616),
-        surfaceContainerHigh = Color(0xFF1C1C1C),
-        surfaceContainerHighest = Color(0xFF242424),
-        outline = Color(0xFF3D3D3D),
-        outlineVariant = Color(0xFF2A2A2A)
+        background = Color(0xFF0B0C0E),
+        surface = Color(0xFF0B0C0E),
+        surfaceTint = Color(0xFF0B0C0E),
+        onBackground = Color(0xFFE2E2E6),
+        onSurface = Color(0xFFE2E2E6),
+        surfaceVariant = Color(0xFF2A2B2E),
+        onSurfaceVariant = Color(0xFFB0B3BB),
+        surfaceContainerLowest = Color(0xFF060708),
+        surfaceContainerLow = Color(0xFF141516),
+        surfaceContainer = Color(0xFF1A1B1D),
+        surfaceContainerHigh = Color(0xFF242528),
+        surfaceContainerHighest = Color(0xFF2F3033),
+        outline = Color(0xFF8E9099),
+        outlineVariant = Color(0xFF3A3B3E)
     ) else copy(
-        background = Color(0xFFF7F7F7),
-        surface = Color(0xFFF7F7F7),
-        surfaceTint = Color(0xFFF7F7F7),
-        onBackground = Color(0xFF111111),
-        onSurface = Color(0xFF111111),
-        surfaceVariant = Color(0xFFE8E8E8),
-        onSurfaceVariant = Color(0xFF5C5C5C),
+        background = Color(0xFFF8F9FC),
+        surface = Color(0xFFF8F9FC),
+        surfaceTint = Color(0xFFF8F9FC),
+        onBackground = Color(0xFF1A1C1E),
+        onSurface = Color(0xFF1A1C1E),
+        surfaceVariant = Color(0xFFE1E2EC),
+        onSurfaceVariant = Color(0xFF44474F),
         surfaceContainerLowest = Color(0xFFFFFFFF),
-        surfaceContainerLow = Color(0xFFF3F3F3),
-        surfaceContainer = Color(0xFFEEEEEE),
-        surfaceContainerHigh = Color(0xFFE8E8E8),
-        surfaceContainerHighest = Color(0xFFE0E0E0),
-        outline = Color(0xFFB0B0B0),
-        outlineVariant = Color(0xFFD6D6D6)
+        surfaceContainerLow = Color(0xFFF2F3F7),
+        surfaceContainer = Color(0xFFECEDF1),
+        surfaceContainerHigh = Color(0xFFE6E8EC),
+        surfaceContainerHighest = Color(0xFFE1E2E6),
+        outline = Color(0xFF74777F),
+        outlineVariant = Color(0xFFC4C6D0)
     )
 
 @Composable
@@ -139,7 +148,6 @@ fun YouCodeTheme(
     val lifecycleOwner = LocalLifecycleOwner.current
     var paletteRevision by remember { mutableIntStateOf(0) }
 
-    // Re-read Monet colors whenever the app returns to the foreground.
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) paletteRevision++
@@ -148,7 +156,6 @@ fun YouCodeTheme(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Read the revision so Compose recalculates the platform wallpaper palette.
     val baseScheme = when {
         paletteRevision >= 0 && dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -157,10 +164,9 @@ fun YouCodeTheme(
         else -> LightColorScheme
     }
 
-    // Фон и поверхности нейтральные (как в приложении Claude), акценты остаются из палитры.
+    // Neutral surfaces (Grok-like), accents stay from palette / dynamic color.
     val colorScheme = baseScheme.withNeutralSurfaces(darkTheme)
 
-    // Smoothly interpolate the wallpaper palette when the system palette changes.
     val animatedScheme = colorScheme.copy(
         primary = animateColorAsState(colorScheme.primary, tween(420)).value,
         onPrimary = animateColorAsState(colorScheme.onPrimary, tween(420)).value,

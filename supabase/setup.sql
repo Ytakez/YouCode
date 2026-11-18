@@ -1,4 +1,4 @@
--- YouCode 1.3.4 Supabase schema. Run in Supabase Dashboard -> SQL Editor.
+-- YouCode 1.3.7 Supabase schema. Run in Supabase Dashboard -> SQL Editor.
 create extension if not exists pgcrypto;
 
 create table if not exists public.profiles (
@@ -28,8 +28,23 @@ create table if not exists public.usage_events (
  client_ip inet, created_at timestamptz not null default now()
 );
 create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path=public as $$
+declare
+ base text;
+ candidate text;
+ n integer := 0;
 begin
- insert into public.profiles(id,username) values(new.id,coalesce(new.raw_user_meta_data->>'username',split_part(new.email,'@',1))) on conflict(id) do nothing;
+ base := coalesce(nullif(new.raw_user_meta_data->>'username',''), split_part(new.email,'@',1));
+ candidate := base;
+ -- username is unique: ivan@gmail.com and ivan@mail.ru must both be able to sign up
+ while exists(select 1 from public.profiles where username = candidate) loop
+  n := n + 1;
+  candidate := base || n::text;
+ end loop;
+ begin
+  insert into public.profiles(id,username) values(new.id,candidate) on conflict(id) do nothing;
+ exception when unique_violation then
+  insert into public.profiles(id,username) values(new.id, base || '_' || substr(new.id::text,1,8)) on conflict(id) do nothing;
+ end;
  return new;
 end; $$;
 drop trigger if exists on_auth_user_created on auth.users;
@@ -44,7 +59,11 @@ alter table public.usage_events enable row level security;
 drop policy if exists "profile self read" on public.profiles;
 create policy "profile self read" on public.profiles for select to authenticated using(id=auth.uid() or public.is_admin());
 drop policy if exists "profile self update safe" on public.profiles;
-create policy "profile self update safe" on public.profiles for update to authenticated using(id=auth.uid()) with check(id=auth.uid() and role='user');
+create policy "profile self update safe" on public.profiles for update to authenticated using(id=auth.uid()) with check(id=auth.uid());
+-- RLS cannot restrict columns: without this a user could raise their own limits / role / is_active.
+-- Only username is editable from the client; role and limits change via SQL Editor or a trusted gateway.
+revoke update on public.profiles from anon, authenticated;
+grant update (username) on public.profiles to authenticated;
 drop policy if exists "sessions own read" on public.chat_sessions;
 create policy "sessions own read" on public.chat_sessions for select to authenticated using(user_id=auth.uid() or public.is_admin());
 drop policy if exists "sessions own insert" on public.chat_sessions;
@@ -61,6 +80,17 @@ drop policy if exists "messages own delete" on public.chat_messages;
 create policy "messages own delete" on public.chat_messages for delete to authenticated using(user_id=auth.uid() or public.is_admin());
 drop policy if exists "usage own read" on public.usage_events;
 create policy "usage own read" on public.usage_events for select to authenticated using(user_id=auth.uid() or public.is_admin());
+-- Telegram login: one-time requests. Only Edge Functions (service role) touch this table.
+create table if not exists public.telegram_login_requests (
+ token text primary key,
+ telegram_id bigint,
+ telegram_username text,
+ first_name text,
+ created_at timestamptz not null default now(),
+ confirmed_at timestamptz
+);
+alter table public.telegram_login_requests enable row level security;
+revoke all on public.telegram_login_requests from anon, authenticated;
 -- No client insert/update policies for usage_events: only a trusted gateway may write usage.
 -- After the owner's first account registers, promote it manually:
 -- update public.profiles set role='admin' where id='YOUR-AUTH-USER-UUID';
