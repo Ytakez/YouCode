@@ -76,7 +76,7 @@ fun ProvidersScreen(
     val savedKeys = remember {
         mutableStateMapOf<String, String>().apply {
             SampleData.providers.forEach { put(it.id, prefs.getString("key_${it.id}", "") ?: "") }
-            SampleData.providers.filter { it.id in setOf("custom-cloud", "pollinations", "opencode-go", "opencode-zen", "claude", "opencode-server") }.forEach { provider ->
+            SampleData.providers.filter { it.id in setOf("custom-cloud", "opencode-go", "opencode-zen", "claude", "opencode-server") }.forEach { provider ->
                 val hasBase = prefs.getString("base_${provider.id}", "").orEmpty().isNotBlank()
                 val configured = if (provider.id == "opencode-server") hasBase else
                     hasBase && prefs.getString("model_${provider.id}", "").orEmpty().isNotBlank() &&
@@ -240,16 +240,15 @@ fun ProvidersScreen(
         KeyDialog(
             item = item,
             currentKey = prefs.getString("key_${item.id}", "") ?: "",
-            custom = item.category == "key" || item.id in setOf("pollinations", "opencode-go", "opencode-zen", "claude", "opencode-server"),
+            custom = item.category == "key" || item.id in setOf("opencode-go", "opencode-zen", "claude", "opencode-server"),
             currentUrl = prefs.getString("base_${item.id}", when (item.id) {
                 "opencode-go" -> "https://opencode.ai/zen/go/v1"
                 "opencode-zen" -> "https://opencode.ai/zen/v1"
                 "claude" -> "https://api.anthropic.com/v1"
                 "opencode-server" -> ""
-                "pollinations" -> "https://gen.pollinations.ai/v1"
                 else -> ""
             }) ?: "",
-            currentModel = prefs.getString("model_${item.id}", if (item.id == "opencode-server") "server-default" else if (item.id == "pollinations") "openai" else "") ?: "",
+            currentModel = prefs.getString("model_${item.id}", if (item.id == "opencode-server") "server-default" else "") ?: "",
             currentProtocol = prefs.getString("protocol_${item.id}", if (item.id == "claude") "anthropic" else "openai") ?: "openai",
             onSaveCustom = { url, key, model, protocol ->
                 prefs.edit().putString("base_${item.id}", url)
@@ -350,7 +349,6 @@ private fun KeyDialog(
                 Text(
                     if (item.id == "opencode-server") "Укажи адрес запущенного OpenCode Server (например, http://192.168.1.10:4096). Пароль — необязательно, если сервер защищён паролем. Бесплатные модели должны быть настроены в самом OpenCode Server; прямой API-доступ к бесплатному тарифу OpenCode запрещён."
                     else if (item.category == "opencode-live") "Ключ будет передан подключённому OpenCode Server и сохранён там для этого провайдера. Сам ключ не сохраняется в настройках YouCode."
-                    else if (item.id == "pollinations") "Вставь секретный API-ключ Pollinations (sk_...). Base URL уже заполнен. Модель выбирается автоматически из 12 вариантов в списке YouCode. Запросы используют Pollen-кредиты аккаунта."
                     else if (custom) "Укажи Base URL, точный ID модели и API-ключ провайдера. OpenCode Go/Zen используют API-ключ из консоли OpenCode; Claude — ключ Anthropic API."
                     else if (isClaude) "Вставь токен Claude Code (Pro или Max)."
                     else "Вставь API-ключ провайдера.",
@@ -363,7 +361,7 @@ private fun KeyDialog(
                         label = { Text(if (item.id == "opencode-server") "Адрес OpenCode Server" else "Домен / Base URL") }, placeholder = { Text(if (item.id == "opencode-server") "http://192.168.1.10:4096" else "https://api.example.com/v1") }, singleLine = true)
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(value = model, onValueChange = { model = it }, modifier = Modifier.fillMaxWidth(),
-                        label = { Text(if (item.id == "opencode-server") "Модель (не используется — выбери на сервере)" else if (item.id == "pollinations") "Модель (автовыбор из списка)" else "Модель") }, placeholder = { Text(if (item.id == "opencode-server") "server-default" else "точный ID модели из каталога провайдера") }, singleLine = true)
+                        label = { Text(if (item.id == "opencode-server") "Модель (не используется — выбери на сервере)" else "Модель") }, placeholder = { Text(if (item.id == "opencode-server") "server-default" else "точный ID модели из каталога провайдера") }, singleLine = true)
                     if (item.id != "opencode-server") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             TextButton(onClick = { protocol = "openai" }) { Text(if (protocol == "openai") "✓ OpenAI API" else "OpenAI API") }
@@ -376,7 +374,7 @@ private fun KeyDialog(
                     value = text,
                     onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text(if (item.id == "opencode-server") "Пароль OpenCode Server" else if (isClaude) "Токен" else if (item.id == "pollinations") "Pollinations API key (sk_...)" else "API-ключ провайдера") },
+                    placeholder = { Text(if (item.id == "opencode-server") "Пароль OpenCode Server" else if (isClaude) "Токен" else "API-ключ провайдера") },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true
                 )

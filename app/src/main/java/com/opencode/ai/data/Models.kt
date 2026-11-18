@@ -13,6 +13,16 @@ data class AiModel(
     val remoteProviderId: String? = null
 )
 
+/** Уровень «разума» (reasoning effort) модели. */
+enum class ReasoningLevel(val label: String, val variant: String?, val openAiEffort: String?, val thinkingBudget: Int) {
+    AUTO("Авто", null, null, 0),
+    LOW("Низкий", "low", "low", 1024),
+    MEDIUM("Средний", "medium", "medium", 4096),
+    HIGH("Большой", "high", "high", 8192),
+    VERY_HIGH("Очень большой", "xhigh", "high", 16000),
+    MAX("Максимальный", "max", "high", 32000)
+}
+
 data class AttachedFile(
     val id: String,
     val name: String,
@@ -23,13 +33,27 @@ data class AttachedFile(
     val isSavedByAi: Boolean = false
 )
 
+/** Один шаг «хода работы» ИИ: размышление или вызов инструмента. */
+data class TraceStep(
+    val id: String,
+    val kind: String, // "thinking" | "tool"
+    val title: String,
+    val text: String = "",
+    val status: String = "running", // running | done | error
+    val startedAt: Long = 0L,
+    val endedAt: Long? = null
+) {
+    val isRunning: Boolean get() = status == "running"
+}
+
 data class ChatMessage(
     val id: String,
     val content: String,
     val isUser: Boolean,
     val timestamp: Long = System.currentTimeMillis(),
     val modelName: String? = null,
-    val attachments: List<AttachedFile> = emptyList()
+    val attachments: List<AttachedFile> = emptyList(),
+    val trace: List<TraceStep> = emptyList()
 )
 
 data class ChatSession(
@@ -159,19 +183,20 @@ object SampleData {
         ),
     )
 
+    /** Запасной список на случай, когда живой каталог ещё не загружен. Основной список приходит из /api/model. */
     val freeModels = listOf(
-        AiModel("hy4-flash-free", "Pollinations · Gemini Flash", "1M", false, "Pollinations"),
-        AiModel("iceman-free", "Pollinations · Mistral", "262k", false, "Pollinations"),
-        AiModel("big-pickle", "Pollinations · Grok", "1M", false, "Pollinations"),
-        AiModel("longcat-2.5-free", "Pollinations · Claude", "1M", false, "Pollinations"),
-        AiModel("flint-40b-free", "Pollinations · Llama", "262k", false, "Pollinations"),
-        AiModel("nemotron-3-ultra-free", "Pollinations · Kimi", "1M", false, "Pollinations"),
-        AiModel("deepseek-v4.1-flash-free", "Pollinations · DeepSeek", "200k", false, "Pollinations"),
-        AiModel("nemotron-3.5-super-vl-free", "Pollinations · Gemini", "1M", false, "Pollinations"),
-        AiModel("beam-free", "Pollinations · Perplexity", "1M", false, "Pollinations"),
-        AiModel("mimo-v2.6-flash-free", "Pollinations · MiniMax", "200k", false, "Pollinations"),
-        AiModel("glm-5.3-flash-free", "Pollinations · GLM", "200k", false, "Pollinations"),
-        AiModel("nemotron-3.5-lightning-free", "Pollinations · Qwen Coder", "1M", false, "Pollinations"),
+        AiModel("hy4-flash-free", "Hy4 Flash Free", "1M", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("iceman-free", "Iceman Free", "262k", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("big-pickle", "Big Pickle", "1M", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("longcat-2.5-free", "LongCat 2.5 Free", "1M", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("flint-40b-free", "Flint 40B Free", "262k", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("nemotron-3-ultra-free", "Nemotron 3 Ultra Free", "1M", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("deepseek-v4.1-flash-free", "DeepSeek V4.1 Flash Free", "200k", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("nemotron-3.5-super-vl-free", "Nemotron 3.5 Super VL Free", "1M", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("beam-free", "Beam Free", "1M", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("mimo-v2.6-flash-free", "MiMo V2.6 Flash Free", "200k", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("glm-5.3-flash-free", "GLM 5.3 Flash Free", "200k", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
+        AiModel("nemotron-3.5-lightning-free", "Nemotron 3.5 Lightning Free", "1M", true, "OpenCode Zen", "Бесплатная модель OpenCode", remoteProviderId = "opencode"),
     )
 
 
@@ -180,7 +205,6 @@ object SampleData {
         ProviderItem("opencode-go", "OpenCode Go", "Подписка opencode: Kimi, GLM, DeepSeek, Qwen, MiniMax и другие открытые модели за фиксированную цену.", "opencode"),
         ProviderItem("opencode-zen", "OpenCode Zen", "Аккаунт opencode: бесплатные модели, а с балансом все модели Zen, включая Claude, GPT и Gemini.", "opencode"),
         ProviderItem("claude", "Claude", "Подписка Claude Pro или Max через официальный Claude Code.", "opencode"),
-        ProviderItem("pollinations", "Pollinations AI (12 моделей)", "12 вариантов моделей через единый Pollinations API. Нужен API-ключ Pollinations; расходуются Pollen-кредиты.", "key", true),
         ProviderItem("custom-cloud", "Свой Cloud / API", "Любой OpenAI-совместимый API: вставь домен, ключ и модель", "key", true),
         ProviderItem("302ai", "302.AI", "API-ключ", "key", true),
         ProviderItem("50x", "50X", "API-ключ", "key", true),

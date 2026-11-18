@@ -48,6 +48,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -111,6 +112,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.opencode.ai.data.AttachedFile
 import com.opencode.ai.data.ChatMessage
+import com.opencode.ai.data.ReasoningLevel
+import com.opencode.ai.data.TraceStep
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.key
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
+import kotlinx.coroutines.delay
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
+import androidx.compose.material.icons.outlined.Psychology
 import com.opencode.ai.viewmodel.ChatViewModel
 import java.util.UUID
 
@@ -219,6 +235,12 @@ fun ChatScreen(
     LaunchedEffect(viewModel.messages.size) {
         if (viewModel.messages.isNotEmpty()) {
             listState.animateScrollToItem(viewModel.messages.size - 1)
+        }
+    }
+
+    LaunchedEffect(viewModel.liveTrace.size, viewModel.isGenerating) {
+        if (viewModel.isGenerating && viewModel.messages.isNotEmpty() && !listState.isScrollInProgress) {
+            listState.animateScrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
         }
     }
 
@@ -355,8 +377,12 @@ fun ChatScreen(
                         )
                     }
                     if (viewModel.isGenerating) {
-                        item(key = "typing_indicator") {
-                            GenerationActivity(viewModel.generationStatus, viewModel.generationActivities, Modifier.animateItem(fadeInSpec = null).entrance(fromX = (-32).dp))
+                        item(key = "live_trace") {
+                            LiveTrace(
+                                steps = viewModel.liveTrace,
+                                status = viewModel.generationStatus,
+                                modifier = Modifier.padding(end = 20.dp)
+                            )
                         }
                     }
                 }
@@ -385,47 +411,6 @@ fun ChatScreen(
 
         // Pending attachments
 
-        // Working folder chip
-        if (viewModel.workingFolderName != null) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Outlined.Folder, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("📁 ${viewModel.workingFolderName}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis)
-                        if (viewModel.workingFolderFiles.isNotEmpty()) {
-                            Text(
-                                viewModel.workingFolderFiles.take(4).joinToString(", ") +
-                                    if (viewModel.workingFolderFiles.size > 4) "…" else "",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                    IconButton(onClick = { viewModel.clearWorkingFolder() }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Отвязать папку",
-                            modifier = Modifier.size(16.dp))
-                    }
-                }
-            }
-        }
-
         AnimatedVisibility(
             visible = viewModel.pendingAttachments.isNotEmpty(),
             enter = fadeIn() + slideInVertically { it / 2 },
@@ -444,13 +429,9 @@ fun ChatScreen(
             }
         }
 
-        // Input: одна «таблетка» как в Claude: «+» слева, поле, круглая кнопка справа
-        var showPlusMenu by remember { mutableStateOf(false) }
-        val plusRotation by animateFloatAsState(
-            targetValue = if (showPlusMenu) 45f else 0f,
-            animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
-            label = "plus_rotation"
-        )
+        // Input: сверху текст, снизу ряд: вложение · разум · папка · отправка
+        var showReasoningMenu by remember { mutableStateOf(false) }
+        var showFolderMenu by remember { mutableStateOf(false) }
         val sendContainer by animateColorAsState(
             targetValue = if (canSend) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -463,6 +444,7 @@ fun ChatScreen(
             animationSpec = spring(stiffness = 400f),
             label = "send_content"
         )
+        val chipColor = MaterialTheme.colorScheme.onSurfaceVariant
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             shape = RoundedCornerShape(28.dp),
@@ -475,61 +457,13 @@ fun ChatScreen(
                 .fillMaxWidth()
                 .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(6.dp)
-            ) {
-                Box {
-                    IconButton(
-                        onClick = { showPlusMenu = true },
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            contentColor = if (viewModel.workingFolderName != null)
-                                MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        ),
-                        modifier = Modifier.pressScale(0.88f).size(44.dp).clip(CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = "Добавить",
-                            modifier = Modifier
-                                .size(24.dp)
-                                .graphicsLayer { rotationZ = plusRotation }
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showPlusMenu,
-                        onDismissRequest = { showPlusMenu = false },
-                        shape = RoundedCornerShape(20.dp)
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Прикрепить файл") },
-                            leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
-                            onClick = {
-                                showPlusMenu = false
-                                openDocumentLauncher.launch(arrayOf("*/*"))
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(viewModel.workingFolderName?.let { "Папка: $it" } ?: "Рабочая папка") },
-                            leadingIcon = { Icon(Icons.Outlined.Folder, contentDescription = null) },
-                            onClick = {
-                                showPlusMenu = false
-                                openTreeLauncher.launch(null)
-                            }
-                        )
-                    }
-                }
-
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
                 BasicTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 8.dp),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
                         color = MaterialTheme.colorScheme.onSurface
                     ),
@@ -539,7 +473,7 @@ fun ChatScreen(
                         Box(contentAlignment = Alignment.CenterStart) {
                             if (inputText.isEmpty()) {
                                 Text(
-                                    "Напиши сообщение…",
+                                    "Сообщение",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                 )
@@ -549,55 +483,176 @@ fun ChatScreen(
                     }
                 )
 
-                val sendScale by animateFloatAsState(
-                    targetValue = if (canSend) 1f else 0.92f,
-                    animationSpec = spring(dampingRatio = 0.5f, stiffness = 420f),
-                    label = "send_scale"
-                )
-                FilledIconButton(
-                    onClick = {
-                        if (canSend) {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.sendMessage(inputText)
-                            inputText = ""
-                        }
-                    },
-                    enabled = canSend,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = sendContainer,
-                        contentColor = sendContent,
-                        disabledContainerColor = sendContainer,
-                        disabledContentColor = sendContent
-                    ),
-                    modifier = Modifier
-                        .graphicsLayer {
-                            scaleX = sendScale
-                            scaleY = sendScale
-                        }
-                        .pressScale(0.86f)
-                        .size(44.dp),
-                    shape = CircleShape
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                 ) {
-                    AnimatedContent(
-                        targetState = viewModel.isGenerating,
-                        transitionSpec = {
-                            (scaleIn(spring(dampingRatio = 0.5f, stiffness = 400f)) + fadeIn()) togetherWith
-                                (scaleOut() + fadeOut())
-                        },
-                        label = "send_icon"
-                    ) { generating ->
-                        if (generating) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                strokeWidth = 2.5.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        } else {
+                    // Вложение
+                    IconButton(
+                        onClick = { openDocumentLauncher.launch(arrayOf("*/*")) },
+                        modifier = Modifier.pressScale(0.88f).size(40.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.AddPhotoAlternate,
+                            contentDescription = "Прикрепить файл",
+                            tint = chipColor,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+
+                    // Разум
+                    Box {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { showReasoningMenu = true }
+                                .padding(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
                             Icon(
-                                Icons.Default.ArrowUpward,
-                                contentDescription = "Отправить",
-                                modifier = Modifier.size(24.dp)
+                                Icons.Outlined.Psychology,
+                                contentDescription = "Разум",
+                                tint = if (viewModel.reasoningLevel == ReasoningLevel.AUTO) chipColor
+                                else MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
                             )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                viewModel.reasoningLevel.label,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (viewModel.reasoningLevel == ReasoningLevel.AUTO)
+                                    MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.primary,
+                                maxLines = 1
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showReasoningMenu,
+                            onDismissRequest = { showReasoningMenu = false },
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            ReasoningLevel.values().forEach { level ->
+                                DropdownMenuItem(
+                                    text = { Text(level.label) },
+                                    trailingIcon = {
+                                        if (level == viewModel.reasoningLevel) {
+                                            Icon(Icons.Default.Check, contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary)
+                                        }
+                                    },
+                                    onClick = {
+                                        viewModel.selectReasoning(level)
+                                        showReasoningMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // Папка (показывает имя выбранной папки)
+                    Box(modifier = Modifier.weight(1f, fill = false)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable {
+                                    if (viewModel.workingFolderName != null) showFolderMenu = true
+                                    else openTreeLauncher.launch(null)
+                                }
+                                .padding(horizontal = 8.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.Folder,
+                                contentDescription = "Рабочая папка",
+                                tint = if (viewModel.workingFolderName != null) MaterialTheme.colorScheme.primary
+                                else chipColor,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                viewModel.workingFolderName ?: "Папка",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showFolderMenu,
+                            onDismissRequest = { showFolderMenu = false },
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Сменить папку") },
+                                leadingIcon = { Icon(Icons.Outlined.Folder, contentDescription = null) },
+                                onClick = {
+                                    showFolderMenu = false
+                                    openTreeLauncher.launch(null)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Отвязать папку") },
+                                leadingIcon = { Icon(Icons.Default.Close, contentDescription = null) },
+                                onClick = {
+                                    showFolderMenu = false
+                                    viewModel.clearWorkingFolder()
+                                }
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    val sendScale by animateFloatAsState(
+                        targetValue = if (canSend) 1f else 0.92f,
+                        animationSpec = spring(dampingRatio = 0.5f, stiffness = 420f),
+                        label = "send_scale"
+                    )
+                    FilledIconButton(
+                        onClick = {
+                            if (canSend) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.sendMessage(inputText)
+                                inputText = ""
+                            }
+                        },
+                        enabled = canSend,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = sendContainer,
+                            contentColor = sendContent,
+                            disabledContainerColor = sendContainer,
+                            disabledContentColor = sendContent
+                        ),
+                        modifier = Modifier
+                            .graphicsLayer {
+                                scaleX = sendScale
+                                scaleY = sendScale
+                            }
+                            .pressScale(0.86f)
+                            .size(44.dp),
+                        shape = CircleShape
+                    ) {
+                        AnimatedContent(
+                            targetState = viewModel.isGenerating,
+                            transitionSpec = {
+                                (scaleIn(spring(dampingRatio = 0.5f, stiffness = 400f)) + fadeIn()) togetherWith
+                                    (scaleOut() + fadeOut())
+                            },
+                            label = "send_icon"
+                        ) { generating ->
+                            if (generating) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    strokeWidth = 2.5.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Send,
+                                    contentDescription = "Отправить",
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -697,6 +752,11 @@ private fun MessageBubble(
                     Spacer(Modifier.height(6.dp))
                 }
 
+                if (!isUser && message.trace.isNotEmpty()) {
+                    TraceSummary(message.trace)
+                    Spacer(Modifier.height(8.dp))
+                }
+
                 Text(
                     message.content,
                     style = MaterialTheme.typography.bodyLarge,
@@ -775,57 +835,259 @@ private fun PendingFileChip(file: AttachedFile, onRemove: () -> Unit) {
     }
 }
 
+private fun thinkingLabel(step: TraceStep, now: Long): String {
+    val end = step.endedAt ?: now
+    val sec = ((end - step.startedAt) / 1000L).coerceAtLeast(0L)
+    return when {
+        step.isRunning -> if (sec >= 1) "Думаю $sec с" else "Думаю…"
+        sec >= 1 -> "Думал $sec с"
+        else -> "Думал"
+    }
+}
+
+private fun toolsWord(n: Int): String {
+    val m100 = n % 100
+    val m10 = n % 10
+    return when {
+        m100 in 11..14 -> "инструментов"
+        m10 == 1 -> "инструмент"
+        m10 in 2..4 -> "инструмента"
+        else -> "инструментов"
+    }
+}
+
+/** Ход работы, пока ответ ещё генерируется: это обычный элемент ленты, он ничего не перекрывает. */
 @Composable
-private fun GenerationActivity(status: String, activities: List<String>, modifier: Modifier = Modifier) {
-    val infinite = rememberInfiniteTransition(label = "activity")
-    val rotation by infinite.animateFloat(
-        initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(1800, easing = androidx.compose.animation.core.LinearEasing)),
-        label = "activity_rotation"
-    )
+private fun LiveTrace(steps: List<TraceStep>, status: String, modifier: Modifier = Modifier) {
+    val shown = steps.takeLast(6)
     Column(
-        modifier = modifier.fillMaxWidth().padding(start = 2.dp, end = 20.dp, top = 4.dp, bottom = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(9.dp)
+        modifier = modifier.fillMaxWidth().animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(22.dp)) {
+        if (steps.size > shown.size) {
+            Text(
+                "Ещё шагов выше: ${steps.size - shown.size}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.padding(start = 6.dp)
+            )
+        }
+        shown.forEach { step ->
+            key(step.id) { TraceStepRow(step = step, live = true) }
+        }
+        if (shown.none { it.isRunning }) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
+            ) {
                 CircularProgressIndicator(
-                    progress = 0.72f, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = rotation },
-                    strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    status,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Text("Работаю над запросом", style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
         }
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+    }
+}
+
+/** Свёрнутая строка над готовым ответом: «Думал 12 с · 3 инструмента». */
+@Composable
+private fun TraceSummary(steps: List<TraceStep>, modifier: Modifier = Modifier) {
+    var open by remember { mutableStateOf(false) }
+    val thinking = steps.filter { it.kind == "thinking" }
+    val thinkSec = thinking.sumOf { ((it.endedAt ?: it.startedAt) - it.startedAt).coerceAtLeast(0L) } / 1000L
+    val tools = steps.count { it.kind == "tool" }
+    val label = buildList {
+        if (thinking.isNotEmpty()) add(if (thinkSec >= 1) "Думал $thinkSec с" else "Думал")
+        if (tools > 0) add("$tools ${toolsWord(tools)}")
+    }.joinToString(" · ").ifBlank { "Ход работы" }
+    Column(modifier = modifier.fillMaxWidth().animateContentSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .clickable { open = !open }
+                .padding(horizontal = 6.dp, vertical = 6.dp)
         ) {
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                Icon(Icons.Outlined.Code, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(17.dp))
-                Text(status, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            Icon(
+                Icons.Outlined.Psychology, contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.width(2.dp))
+            Icon(
+                if (open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
         }
-        activities.forEach { activity ->
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
-            ) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(Icons.Outlined.Code, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(15.dp))
-                    Text(activity, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (open) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                steps.forEach { step ->
+                    key(step.id) { TraceStepRow(step = step, live = false) }
                 }
             }
         }
-        Text("Показываются реальные действия и инструменты OpenCode, а не скрытые рассуждения модели", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
+    }
+}
+
+@Composable
+private fun TraceStepRow(step: TraceStep, live: Boolean, modifier: Modifier = Modifier) {
+    val isThinking = step.kind == "thinking"
+    val running = live && step.isRunning
+    // null = «авто»: пока модель думает, текст раскрыт; после окончания сворачивается
+    var userToggle by remember(step.id) { mutableStateOf<Boolean?>(null) }
+    val expanded = userToggle ?: (running && isThinking)
+    val hasText = step.text.isNotBlank()
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(running) {
+        while (running) {
+            now = System.currentTimeMillis()
+            delay(500)
+        }
+    }
+
+    if (isThinking) {
+        Column(modifier = modifier.fillMaxWidth().animateContentSize()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable(enabled = hasText) { userToggle = !expanded }
+                    .padding(horizontal = 6.dp, vertical = 6.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.Psychology, contentDescription = null,
+                    tint = if (running) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    thinkingLabel(step, now),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (hasText) {
+                    Spacer(Modifier.width(2.dp))
+                    Icon(
+                        if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            if (expanded && hasText) {
+                val lineColor = MaterialTheme.colorScheme.outlineVariant
+                val scroll = rememberScrollState()
+                LaunchedEffect(step.text.length, running) {
+                    if (running) scroll.scrollTo(scroll.maxValue)
+                }
+                Box(
+                    modifier = Modifier
+                        .padding(start = 14.dp, top = 2.dp, bottom = 4.dp)
+                        .heightIn(max = 180.dp)
+                        .drawBehind {
+                            drawLine(
+                                color = lineColor,
+                                start = Offset(1.dp.toPx(), 0f),
+                                end = Offset(1.dp.toPx(), size.height),
+                                strokeWidth = 2.dp.toPx()
+                            )
+                        }
+                ) {
+                    Text(
+                        step.text.trim(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .verticalScroll(scroll)
+                            .padding(start = 14.dp)
+                    )
+                }
+            }
+        }
+    } else {
+        val isError = step.status == "error"
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = modifier.fillMaxWidth().animateContentSize()
+        ) {
+            Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = hasText) { userToggle = !expanded }
+                        .padding(horizontal = 12.dp, vertical = 11.dp)
+                ) {
+                    when {
+                        running -> CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp), strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        isError -> Icon(
+                            Icons.Outlined.ErrorOutline, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp)
+                        )
+                        else -> Icon(
+                            Icons.Outlined.CheckCircle, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        step.title,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (hasText) {
+                        Icon(
+                            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                if (expanded && hasText) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 180.dp)
+                            .verticalScroll(rememberScrollState())
+                            .horizontalScroll(rememberScrollState())
+                            .padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
+                    ) {
+                        Text(
+                            step.text.trim(),
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
