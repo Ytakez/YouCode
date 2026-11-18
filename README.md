@@ -98,6 +98,18 @@ OPENCODE_PASSWORD='замените-на-длинный-пароль' opencode s
 Не открывайте порт 4096 напрямую в интернет. Для удалённого доступа используйте защищённый туннель/официальное pairing OpenCode. API-подключение требует работающего компьютера/сервера с OpenCode; один только ZIP не может предоставить бесплатные вычисления.
 
 
+## Pollinations API integration
+
+The 12 model choices in the app are routed through the Pollinations OpenAI-compatible API:
+`https://gen.pollinations.ai/v1`.
+
+1. Open **Providers** in the app.
+2. Select **Pollinations AI (12 моделей)**.
+3. Create a secret API key at https://enter.pollinations.ai and paste it into the API-key field.
+4. Save the provider, then choose any of the 12 Pollinations-labelled models in the model picker.
+
+The app maps its 12 stable model choices to Pollinations model aliases. Pollinations may change its live model catalog, aliases, access rules, and pricing. API use requires a Pollinations key and consumes the account's Pollen credits; this integration does **not** promise unlimited or permanently free inference. Check the Pollinations dashboard before use.
+
 ## Каталог OpenCode (live)
 
 The provider screen now reads the live provider integrations from `GET /api/integration` and the model catalogue from `GET /api/model` on the configured OpenCode Server. Model IDs retain their `providerID` so identically named models from different providers remain distinct. Provider API keys entered for a live integration are sent to the server's `POST /api/integration/{providerID}/connect/key` endpoint; they are not stored in YouCode preferences. Refreshing the provider screen reloads both catalogues. OAuth/browser sign-in and Claude Code's local external-process flow are not yet implemented in this YouCode port.
@@ -156,6 +168,7 @@ The redesign changes presentation only; existing chat, provider, model, and sett
 - Нужен Android 9+ и arm64 (`minSdk` = 28).
 - При старте приложение само подключает встроенный сервер и выбирает бесплатную модель.
   Если в «Провайдерах» указан внешний сервер, он остаётся приоритетным.
+- Модели «Pollinations» требуют ключ и не помечены как бесплатные.
 - У бесплатных моделей OpenCode есть лимит использования, судя по всему, он считается по IP-адресу.
 - Пока идёт ответ, работает уведомление-сервис, чтобы система не замораживала приложение.
 - Документация по встраиванию opencode в JS-приложения (`@opencode/sdk`) здесь не используется:
