@@ -175,3 +175,15 @@ The redesign changes presentation only; existing chat, provider, model, and sett
   она работает внутри JS-рантайма и не открывает HTTP-порт, а приложению на Kotlin нужен именно сервер.
 
 Лицензии сторонних компонентов: `THIRD_PARTY_LICENSES.md`.
+
+
+## Supabase backend foundation (1.3.4)
+
+See `SUPABASE_SETUP.md` and run `supabase/setup.sql` in the Supabase SQL Editor. Project URL: `https://gzuzyagiqgvpeqkksaml.supabase.co`. The publishable key is intended for client use; never put a service-role/secret key in the APK. This release adds the database/RLS foundation only; Android auth UI and the metered public AI gateway remain to be implemented. Quotas are not enforced until all model requests pass through that gateway.
+
+
+## Вход по электронной почте (Supabase)
+
+В версии 1.3.5 добавлены экраны входа и регистрации через Supabase Auth. Перед сборкой APK откройте Supabase → Authentication → Providers → Email и включите Email provider. Если включено подтверждение почты, после регистрации пользователь должен перейти по ссылке из письма и затем войти в приложение.
+
+В приложении токены сессии сохраняются в зашифрованном виде с использованием Android Keystore. Публичный publishable key используется на клиенте; секретный service_role ключ в приложение добавлять нельзя.

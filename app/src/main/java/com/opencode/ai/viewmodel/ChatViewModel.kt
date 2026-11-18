@@ -21,6 +21,8 @@ import com.opencode.ai.data.SmartMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -317,6 +319,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var isGenerating by mutableStateOf(false)
         private set
 
+    var generationStatus by mutableStateOf("Подготавливаю запрос")
+        private set
+
+    /** Реальные события инструментов OpenCode (не скрытые рассуждения модели). */
+    val generationActivities = mutableStateListOf<String>()
+
     var searchQuery by mutableStateOf("")
         private set
 
@@ -416,6 +424,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId
 
         isGenerating = true
+        generationActivities.clear()
+        generationStatus = "Подключаюсь к модели"
         EngineService.start(getApplication<Application>())
         viewModelScope.launch {
             // Если система убила встроенный движок в фоне, поднимаем его заново.
@@ -426,6 +436,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val remoteModel = providerPrefs.getString("model_${providerId}", "").orEmpty().trim()
             val requestModel = if (providerId == "pollinations") pollinationsModels[currentModel.id].orEmpty() else remoteModel
             val protocol = providerPrefs.getString("protocol_${providerId}", "openai").orEmpty()
+            generationStatus = if (providerId == "opencode-server") "Подключаюсь к OpenCode" else "Отправляю запрос провайдеру"
             val reply = if (providerId == "opencode-server" && endpoint.isNotBlank()) {
                 runCatching {
                     withContext(Dispatchers.IO) {
@@ -438,16 +449,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             append("\nПользователь: ").append(text)
                             attachmentsCopy.forEach { f -> append("\n\n[Файл: ").append(f.name).append("]\n").append(f.contentPreview.take(12000)) }
                         }
-                        callOpenCodeServer(endpoint, apiKey, currentModel.id, fullPrompt, currentModel.remoteProviderId)
+                        callOpenCodeServer(endpoint, apiKey, currentModel.id, fullPrompt, currentModel.remoteProviderId) { stage ->
+                            viewModelScope.launch(Dispatchers.Main) { generationStatus = stage }
+                        }
                     }
                 }.fold(
                     onSuccess = { it to emptyList<AttachedFile>() },
                     onFailure = {
                         val reason = it.message ?: "не удалось выполнить запрос"
-                        if (reason.contains("limit", ignoreCase = true)) {
-                            "Бесплатный лимит OpenCode исчерпан. Подожди сброса, смени сеть (Wi-Fi или мобильный интернет), выбери другую модель или подключи свой ключ в «Провайдерах».\n\n($reason)" to emptyList()
+                        val isRealRateLimit = reason.contains("HTTP 429", ignoreCase = true) ||
+                            reason.contains("rate limit", ignoreCase = true) ||
+                            reason.contains("too many requests", ignoreCase = true) ||
+                            reason.contains("quota exceeded", ignoreCase = true)
+                        if (isRealRateLimit) {
+                            "Провайдер действительно отклонил запрос из-за ограничения частоты или квоты. Подробности: $reason" to emptyList()
                         } else {
-                            "Ошибка OpenCode: $reason. Проверь, что выбрана модель OpenCode и сервер запущен." to emptyList()
+                            "Ошибка OpenCode (это не обязательно лимит): $reason" to emptyList()
                         }
                     }
                 )
@@ -464,12 +481,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 ("ИИ не подключён. Открой «Провайдеры» и подключи OpenCode Server или укажи Base URL, API-ключ и ID модели для другого провайдера. Демонстрационные ответы отключены.") to emptyList()
             }
+            generationStatus = "Получен ответ · оформляю результат"
             val shownModel = if (providerId == "pollinations" || providerId == "opencode-server") currentModel.name else if (remoteModel.isNotBlank()) remoteModel else currentModel.name
             messages.add(ChatMessage(
                 id = UUID.randomUUID().toString(), content = reply.first, isUser = false,
                 modelName = shownModel, attachments = reply.second
             ))
             isGenerating = false
+            generationStatus = "Готово"
             EngineService.stop(getApplication<Application>())
             saveSession(sessionId)
         }
@@ -505,7 +524,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * Direct calls to OpenCode's free-tier inference endpoints from third-party apps
      * are rejected by OpenCode; the official server is the supported bridge.
      */
-    private fun callOpenCodeServer(baseUrl: String, password: String, modelId: String, prompt: String, selectedProviderId: String? = null): String {
+    private fun callOpenCodeServer(baseUrl: String, password: String, modelId: String, prompt: String, selectedProviderId: String? = null, onStage: (String) -> Unit = {}): String {
         val root = baseUrl.trim().trimEnd('/')
         require(root.startsWith("https://") || root.startsWith("http://")) {
             "Адрес сервера должен начинаться с http:// или https://"
@@ -514,37 +533,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         fun request(path: String, body: JSONObject? = null): JSONObject {
             val connection = (URL("$root/$path").openConnection() as HttpURLConnection).apply {
                 requestMethod = if (body == null) "GET" else "POST"
-                connectTimeout = 12000
-                readTimeout = 120000
+                connectTimeout = 15000
+                readTimeout = 180000
                 setRequestProperty("Accept", "application/json")
                 if (body != null) {
                     doOutput = true
-                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
                 }
                 if (password.isNotBlank()) {
-                    val credentials = "opencode:$password"
-                    val encoded = Base64.encodeToString(credentials.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                    val encoded = Base64.encodeToString("opencode:$password".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                     setRequestProperty("Authorization", "Basic $encoded")
                 }
             }
             try {
                 if (body != null) connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
                 val status = connection.responseCode
-                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-                val raw = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                val raw = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                    ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
                 if (status !in 200..299) {
-                    val detail = runCatching { JSONObject(raw).optString("message").ifBlank { JSONObject(raw).optJSONObject("error")?.optString("message").orEmpty() } }.getOrNull().orEmpty()
-                    throw IllegalStateException("HTTP $status${if (detail.isNotBlank()) ": $detail" else ": ${raw.take(300)}"}")
+                    val detail = runCatching {
+                        val json = JSONObject(raw)
+                        json.optString("message").ifBlank {
+                            json.optJSONObject("error")?.optString("message").orEmpty()
+                        }.ifBlank { json.optString("name") }
+                    }.getOrNull().orEmpty()
+                    throw IllegalStateException("HTTP $status${if (detail.isNotBlank()) ": $detail" else ": ${raw.take(600)}"}")
                 }
                 return if (raw.isBlank()) JSONObject() else JSONObject(raw)
-            } finally { connection.disconnect() }
+            } finally {
+                connection.disconnect()
+            }
         }
 
-        // Resolve the providerID from the live server catalog instead of guessing it.
+        // Resolve providerID against the live catalogue: model IDs are not globally unique.
+        onStage("Проверяю каталог моделей")
         val catalog = request("api/model")
         val models = catalog.optJSONArray("data") ?: catalog.optJSONArray("models") ?: JSONArray()
-        var providerId: String? = selectedProviderId
-        if (providerId.isNullOrBlank()) {
+        var providerId = selectedProviderId?.takeIf { it.isNotBlank() }
+        if (providerId == null) {
             for (i in 0 until models.length()) {
                 val item = models.optJSONObject(i) ?: continue
                 if (item.optString("id") == modelId) {
@@ -554,15 +580,103 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        require(providerId != null) {
-            "Модель $modelId не найдена в каталоге сервера. Обнови OpenCode и проверь, что эта бесплатная модель доступна в твоём регионе."
+        require(!providerId.isNullOrBlank()) {
+            "Модель $modelId не найдена в каталоге OpenCode. Обнови список моделей и выбери доступную модель."
         }
 
-        val response = request("api/experimental/generate/text", JSONObject()
-            .put("prompt", prompt)
-            .put("model", JSONObject().put("id", modelId).put("providerID", providerId)))
-        val answer = response.optJSONObject("data")?.optString("text").orEmpty()
-        return answer.ifBlank { throw IllegalStateException("OpenCode Server вернул пустой ответ") }
+        // Use the documented session/message API instead of the legacy experimental generate/text route.
+        onStage("Создаю сессию")
+        val session = request("api/session", JSONObject().put("title", "YouCode Android"))
+        val sessionId = session.optString("id").ifBlank {
+            session.optJSONObject("data")?.optString("id").orEmpty()
+        }
+        require(sessionId.isNotBlank()) { "OpenCode создал сессию без ID: ${session.toString().take(400)}" }
+
+        // Subscribe to OpenCode's real event stream before sending the prompt.
+        // This surfaces actual tool calls (shell/read/edit/etc.), not fabricated "thinking" text.
+        val eventJob = listenOpenCodeEvents(root, password, sessionId)
+        try {
+        val messageBody = JSONObject()
+            .put("model", JSONObject().put("providerID", providerId).put("id", modelId))
+            .put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", prompt)))
+        onStage("Модель обрабатывает запрос")
+        val response = request("api/session/${enc(sessionId)}/message", messageBody)
+        onStage("Получаю результат модели")
+        val parts = response.optJSONArray("parts")
+            ?: response.optJSONObject("data")?.optJSONArray("parts")
+            ?: JSONArray()
+        val answer = buildList {
+            for (i in 0 until parts.length()) {
+                val part = parts.optJSONObject(i) ?: continue
+                if (part.optString("type") == "text") {
+                    part.optString("text").takeIf { it.isNotBlank() }?.let(::add)
+                }
+            }
+        }.joinToString("\n").trim()
+        return answer.ifBlank {
+            throw IllegalStateException("OpenCode не вернул текст ответа. Ответ API: ${response.toString().take(600)}")
+        }
+        } finally {
+            eventJob.cancel()
+        }
+    }
+
+    private fun listenOpenCodeEvents(root: String, password: String, sessionId: String): Job = viewModelScope.launch(Dispatchers.IO) {
+        val connection = (URL("$root/event").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10000
+            readTimeout = 5000
+            setRequestProperty("Accept", "text/event-stream")
+            setRequestProperty("Cache-Control", "no-cache")
+            if (password.isNotBlank()) {
+                val encoded = Base64.encodeToString("opencode:$password".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                setRequestProperty("Authorization", "Basic $encoded")
+            }
+        }
+        try {
+            if (connection.responseCode !in 200..299) return@launch
+            val listenerJob = currentCoroutineContext()[Job]
+            connection.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                var data = StringBuilder()
+                lines.forEach { line ->
+                    if (listenerJob?.isActive != true) return@useLines
+                    if (line.startsWith("data:")) data.append(line.removePrefix("data:").trim()).append(' ')
+                    if (line.isBlank() && data.isNotEmpty()) {
+                        val raw = data.toString().trim(); data = StringBuilder()
+                        runCatching {
+                            val envelope = JSONObject(raw)
+                            val event = envelope.optJSONObject("payload") ?: envelope
+                            val type = event.optString("type")
+                            val props = event.optJSONObject("properties") ?: JSONObject()
+                            val part = props.optJSONObject("part")
+                            val eventSession = props.optString("sessionID")
+                                .ifBlank { props.optString("sessionId") }
+                                .ifBlank { part?.optString("sessionID").orEmpty() }
+                            if (eventSession.isNotBlank() && eventSession != sessionId) return@runCatching
+                            if (type.contains("part.updated") && part?.optString("type") == "tool") {
+                                val tool = part.optString("tool").ifBlank { "Инструмент" }
+                                val state = part.optJSONObject("state") ?: JSONObject()
+                                val status = state.optString("status")
+                                val title = state.optString("title").ifBlank { state.optString("description") }
+                                val input = state.optJSONObject("input")
+                                val command = input?.optString("command")?.takeIf { it.isNotBlank() }
+                                val label = buildString {
+                                    append(tool)
+                                    if (status.isNotBlank()) append(" · ").append(when(status) { "running" -> "выполняется"; "completed" -> "завершено"; "error" -> "ошибка"; else -> status })
+                                    (title.takeIf { it.isNotBlank() } ?: command)?.let { append(" · ").append(it.take(180)) }
+                                }
+                                viewModelScope.launch(Dispatchers.Main) {
+                                    if (generationActivities.lastOrNull() != label) generationActivities.add(label)
+                                    if (generationActivities.size > 30) generationActivities.removeAt(0)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Event streaming is optional; the ordinary message response remains authoritative.
+        } finally { connection.disconnect() }
     }
 
     private fun callAnthropic(

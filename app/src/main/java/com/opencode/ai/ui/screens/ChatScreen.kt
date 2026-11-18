@@ -356,7 +356,7 @@ fun ChatScreen(
                     }
                     if (viewModel.isGenerating) {
                         item(key = "typing_indicator") {
-                            TypingIndicator(Modifier.animateItem(fadeInSpec = null).entrance(fromX = (-32).dp))
+                            GenerationActivity(viewModel.generationStatus, viewModel.generationActivities, Modifier.animateItem(fadeInSpec = null).entrance(fromX = (-32).dp))
                         }
                     }
                 }
@@ -464,9 +464,9 @@ fun ChatScreen(
             label = "send_content"
         )
         Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = RoundedCornerShape(30.dp),
-            shadowElevation = 6.dp,
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = RoundedCornerShape(28.dp),
+            shadowElevation = 1.dp,
             border = androidx.compose.foundation.BorderStroke(
                 1.dp,
                 MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
@@ -685,12 +685,12 @@ private fun MessageBubble(
                 bottomStart = if (isUser) 26.dp else 8.dp,
                 bottomEnd = if (isUser) 8.dp else 26.dp
             ),
-            color = if (isUser) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
-            else MaterialTheme.colorScheme.surfaceContainer,
-            tonalElevation = if (isUser) 0.dp else 2.dp,
-            modifier = Modifier.widthIn(max = 340.dp).animateContentSize()
+            color = if (isUser) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f)
+            else Color.Transparent,
+            tonalElevation = 0.dp,
+            modifier = Modifier.widthIn(max = 360.dp).animateContentSize()
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
+            Column(modifier = Modifier.padding(if (isUser) 14.dp else 2.dp)) {
                 if (!isUser && message.modelName != null) {
                     Text(message.modelName, style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
@@ -776,45 +776,56 @@ private fun PendingFileChip(file: AttachedFile, onRemove: () -> Unit) {
 }
 
 @Composable
-private fun TypingIndicator(modifier: Modifier = Modifier) {
-    val infinite = rememberInfiniteTransition(label = "typing")
-    val bounces = (0..2).map { i ->
-        infinite.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(420, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse,
-                initialStartOffset = StartOffset(i * 140)
-            ),
-            label = "dot$i"
-        )
-    }
-
-    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-            Row(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                verticalAlignment = Alignment.CenterVertically
+private fun GenerationActivity(status: String, activities: List<String>, modifier: Modifier = Modifier) {
+    val infinite = rememberInfiniteTransition(label = "activity")
+    val rotation by infinite.animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = androidx.compose.animation.core.LinearEasing)),
+        label = "activity_rotation"
+    )
+    Column(
+        modifier = modifier.fillMaxWidth().padding(start = 2.dp, end = 20.dp, top = 4.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(22.dp)) {
+                CircularProgressIndicator(
+                    progress = 0.72f, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = rotation },
+                    strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            }
+            Text("Работаю над запросом", style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
+        }
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+        ) {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                Icon(Icons.Outlined.Code, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(17.dp))
+                Text(status, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        activities.forEach { activity ->
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
             ) {
-                bounces.forEach { state ->
-                    Box(
-                        modifier = Modifier
-                            .size(9.dp)
-                            .graphicsLayer {
-                                val v = state.value
-                                translationY = -v * 7.dp.toPx()
-                                scaleX = 1f + 0.3f * v
-                                scaleY = 1f + 0.3f * v
-                                alpha = 0.45f + 0.55f * v
-                            }
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
+                Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.Code, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(15.dp))
+                    Text(activity, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
+        Text("Показываются реальные действия и инструменты OpenCode, а не скрытые рассуждения модели", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
     }
 }
 

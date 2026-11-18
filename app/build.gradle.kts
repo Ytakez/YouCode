@@ -13,8 +13,10 @@ android {
         ndk { abiFilters += "arm64-v8a" }
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.3.0"
+        buildConfigField("String", "SUPABASE_URL", "\"https://gzuzyagiqgvpeqkksaml.supabase.co\"")
+        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_gXGst8Hdc4LbcdGqMF4MbA_bwAodaTr\"")
+        versionCode = 8
+        versionName = "1.3.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

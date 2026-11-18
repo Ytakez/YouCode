@@ -6,6 +6,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
+import com.opencode.ai.auth.AuthManager
+import com.opencode.ai.auth.AuthScreen
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.opencode.ai.ui.screens.MainScreen
@@ -18,9 +22,16 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             YouCodeTheme {
+                val context = LocalContext.current
+                val auth = remember { AuthManager(context.applicationContext) }
+                var session by remember { mutableStateOf(auth.currentSession()) }
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    val viewModel: ChatViewModel = viewModel()
-                    MainScreen(viewModel = viewModel)
+                    if (session == null) {
+                        AuthScreen(auth = auth, onAuthenticated = { session = it })
+                    } else {
+                        val viewModel: ChatViewModel = viewModel()
+                        MainScreen(viewModel = viewModel)
+                    }
                 }
             }
         }
