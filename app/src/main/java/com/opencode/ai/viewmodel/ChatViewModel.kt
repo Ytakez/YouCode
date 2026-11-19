@@ -392,19 +392,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var currentSessionId: String? = null
 
-    init {
-        loadSessions()
-        // Восстановить чип рабочей папки после перезапуска
-        if (preferredFolder.isNotBlank()) {
-            val label = folderLabel()
-            val files = runCatching {
-                agentFolder().listFiles()?.mapNotNull { it.name }?.filter { !it.startsWith(".") }?.take(30) ?: emptyList()
-            }.getOrDefault(emptyList())
-            workingFolderName = label
-            workingFolderFiles.clear()
-            workingFolderFiles.addAll(files)
-        }
-    }
 
     // Pending attachments before send
     var pendingAttachments = mutableStateListOf<AttachedFile>()
@@ -424,6 +411,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
     /** Есть ли доступ «ко всем файлам» (Android 11+). */
     var filesGranted by mutableStateOf(hasAllFilesAccess())
+
+    init {
+        loadSessions()
+        // Восстановить чип рабочей папки после перезапуска
+        if (preferredFolder.isNotBlank()) {
+            val label = folderLabel()
+            val files = runCatching {
+                agentFolder().listFiles()?.mapNotNull { it.name }?.filter { !it.startsWith(".") }?.take(30) ?: emptyList()
+            }.getOrDefault(emptyList())
+            workingFolderName = label
+            workingFolderFiles.clear()
+            workingFolderFiles.addAll(files)
+        }
+    }
         private set
 
     val phoneRoot: File get() = android.os.Environment.getExternalStorageDirectory()
