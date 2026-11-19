@@ -411,6 +411,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
     /** Есть ли доступ «ко всем файлам» (Android 11+). */
     var filesGranted by mutableStateOf(hasAllFilesAccess())
+        private set
 
     init {
         loadSessions()
@@ -425,7 +426,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             workingFolderFiles.addAll(files)
         }
     }
-        private set
 
     val phoneRoot: File get() = android.os.Environment.getExternalStorageDirectory()
 
