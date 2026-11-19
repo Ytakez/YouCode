@@ -61,6 +61,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var engineError by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * Пока true — на экране показываем «Загрузка OpenCode…»:
+     * движок стартует или каталог моделей ещё не подтянулся.
+     */
+    var isOpenCodeLoading by mutableStateOf(true)
+        private set
+
+    /** Подпись под спиннером на сплэше загрузки. */
+    var openCodeLoadingLabel by mutableStateOf("Загрузка OpenCode…")
+        private set
+
     /** true, если движком управляет само приложение (нет внешнего сервера и есть бинарник). */
     private var engineManaged = false
     private val engineLock = kotlinx.coroutines.sync.Mutex()
@@ -92,11 +103,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (!engine.available) {
             engineState = "missing"
             engineError = "Нет libopencode.so в APK. Собери через GitHub Actions (шаг Build opencode engine) или локально: sh engine/build-engine.sh"
+            isOpenCodeLoading = false
             return
         }
         val saved = providerPrefs.getString("base_opencode-server", "").orEmpty()
         // Если пользователь подключил свой внешний сервер, его не трогаем.
-        if (saved.isNotBlank() && !saved.contains("127.0.0.1")) { engineState = "external"; return }
+        if (saved.isNotBlank() && !saved.contains("127.0.0.1")) {
+            engineState = "external"
+            isOpenCodeLoading = false
+            return
+        }
+        engineState = "starting"
+        openCodeLoadingLabel = "Загрузка OpenCode…"
+        isOpenCodeLoading = true
         // Как в Margy: конфиг и инструкции перед стартом процесса
         engine.extraEnv = {
             mapOf("OPENCODE_CONFIG_CONTENT" to openCodeBuiltInConfig())
@@ -135,6 +154,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         engineLock.withLock {
             if (engine.running) return
             engineState = "starting"
+            openCodeLoadingLabel = "Запуск OpenCode…"
+            isOpenCodeLoading = true
             runCatching { engine.start() }
                 .onSuccess {
                     // Пароль и порт свои у каждого запуска, но выбор провайдера пользователя не перетираем:
@@ -148,11 +169,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     editor.apply()
                     engineState = "ready"
                     engineError = null
+                    openCodeLoadingLabel = "Загрузка моделей…"
                     refreshOpenCodeModels()
                 }
                 .onFailure {
                     engineState = "error"
                     engineError = it.message
+                    isOpenCodeLoading = false
                 }
         }
     }
@@ -270,6 +293,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }.onFailure {
                 openCodeCatalogError = it.message ?: "Не удалось загрузить каталог OpenCode"
                 // Existing local catalogue remains usable when server is unavailable.
+                isOpenCodeLoading = false
             }.onSuccess {
                 openCodeCatalogError = null
                 // Выбранная модель могла исчезнуть из каталога (или ещё не выбрана): берём доступную,
@@ -283,6 +307,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 ) {
                     (openCodeModels.firstOrNull { it.isFree } ?: openCodeModels.first()).let { selectModel(it) }
                 }
+                isOpenCodeLoading = false
             }
         }
     }
@@ -690,11 +715,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val isRealRateLimit = reason.contains("HTTP 429", ignoreCase = true) ||
                             reason.contains("rate limit", ignoreCase = true) ||
                             reason.contains("too many requests", ignoreCase = true) ||
-                            reason.contains("quota exceeded", ignoreCase = true)
+                            reason.contains("quota exceeded", ignoreCase = true) ||
+                            reason.contains("usage limit", ignoreCase = true) ||
+                            reason.contains("limit reached", ignoreCase = true) ||
+                            reason.contains("free usage", ignoreCase = true)
                         if (isRealRateLimit) {
-                            "Провайдер действительно отклонил запрос из-за ограничения частоты или квоты. Подробности: $reason" to emptyList()
+                            "Лимит бесплатного OpenCode исчерпан. Подключи своего провайдера, смени модель или подпишись на OpenCode Go.
+
+$reason" to emptyList()
                         } else {
-                            "Ошибка OpenCode (это не обязательно лимит): $reason" to emptyList()
+                            "Ошибка OpenCode: $reason" to emptyList()
                         }
                     }
                 )

@@ -124,7 +124,7 @@ fun AuthScreen(onAuthenticated: (AuthSession) -> Unit, auth: AuthManager) {
             Spacer(Modifier.height(28.dp))
 
             Text(
-                "Премиум-чат с ИИ на вашем телефоне.\nВход через Telegram — быстро и без паролей.",
+                "Несколько ИИ-чатов на одном устройстве.\nВход через Telegram — быстро и без пароля.",
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontSize = 15.sp,
                     lineHeight = 22.sp

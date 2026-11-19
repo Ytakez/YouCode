@@ -152,7 +152,7 @@ fun ChatScreen(
         label = "topbar_elevation"
     )
     val canSend = (inputText.isNotBlank() || viewModel.pendingAttachments.isNotEmpty()) &&
-        !viewModel.isGenerating
+        !viewModel.isGenerating && !viewModel.isOpenCodeLoading
 
     val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -231,6 +231,7 @@ fun ChatScreen(
         if (nearBottom) listState.animateScrollToItem(target)
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -310,7 +311,7 @@ fun ChatScreen(
                         )
                         Spacer(Modifier.width(7.dp))
                         AnimatedContent(
-                            targetState = viewModel.currentModel.name,
+                            targetState = if (viewModel.isOpenCodeLoading) viewModel.openCodeLoadingLabel.ifBlank { "OpenCode…" } else viewModel.currentModel.name,
                             transitionSpec = {
                                 (fadeIn(tween(220)) + slideInVertically(spring(stiffness = 500f)) { it / 2 }) togetherWith
                                     (fadeOut(tween(120)) + slideOutVertically(spring(stiffness = 500f)) { -it / 2 })
@@ -402,47 +403,6 @@ fun ChatScreen(
 
         // Pending attachments
 
-        // Working folder chip
-        if (viewModel.workingFolderName != null) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Outlined.Folder, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("📁 ${viewModel.workingFolderName}",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis)
-                        if (viewModel.workingFolderFiles.isNotEmpty()) {
-                            Text(
-                                viewModel.workingFolderFiles.take(4).joinToString(", ") +
-                                    if (viewModel.workingFolderFiles.size > 4) "…" else "",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                    IconButton(onClick = { viewModel.clearWorkingFolder() }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Отвязать папку",
-                            modifier = Modifier.size(16.dp))
-                    }
-                }
-            }
-        }
-
         AnimatedVisibility(
             visible = viewModel.pendingAttachments.isNotEmpty(),
             enter = fadeIn() + slideInVertically { it / 2 },
@@ -482,7 +442,7 @@ fun ChatScreen(
         )
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(24.dp),
             shadowElevation = 1.dp,
             border = androidx.compose.foundation.BorderStroke(
                 1.dp,
@@ -492,61 +452,14 @@ fun ChatScreen(
                 .fillMaxWidth()
                 .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(6.dp)
-            ) {
-                Box {
-                    IconButton(
-                        onClick = { showPlusMenu = true },
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            contentColor = if (viewModel.workingFolderName != null)
-                                MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        ),
-                        modifier = Modifier.pressScale(0.88f).size(44.dp).clip(CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = "Добавить",
-                            modifier = Modifier
-                                .size(24.dp)
-                                .graphicsLayer { rotationZ = plusRotation }
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showPlusMenu,
-                        onDismissRequest = { showPlusMenu = false },
-                        shape = RoundedCornerShape(20.dp)
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Прикрепить файл") },
-                            leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
-                            onClick = {
-                                showPlusMenu = false
-                                openDocumentLauncher.launch(arrayOf("*/*"))
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(viewModel.workingFolderName?.let { "Папка: $it" } ?: "Рабочая папка") },
-                            leadingIcon = { Icon(Icons.Outlined.Folder, contentDescription = null) },
-                            onClick = {
-                                showPlusMenu = false
-                                showFolderDialog = true
-                            }
-                        )
-                    }
-                }
-
+            Column(Modifier.padding(6.dp)) {
+                // Поле ввода
                 BasicTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     textStyle = MaterialTheme.typography.bodyLarge.copy(
                         color = MaterialTheme.colorScheme.onSurface
                     ),
@@ -566,74 +479,147 @@ fun ChatScreen(
                     }
                 )
 
-                val sendScale by animateFloatAsState(
-                    targetValue = if (canSend) 1f else 0.92f,
-                    animationSpec = spring(dampingRatio = 0.5f, stiffness = 420f),
-                    label = "send_scale"
-                )
-                FilledIconButton(
-                    onClick = {
-                        if (viewModel.isGenerating) {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.stopGeneration()
-                        } else if (canSend) {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.sendMessage(inputText)
-                            inputText = ""
-                        }
-                    },
-                    enabled = canSend || viewModel.isGenerating,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = sendContainer,
-                        contentColor = sendContent,
-                        disabledContainerColor = sendContainer,
-                        disabledContentColor = sendContent
-                    ),
-                    modifier = Modifier
-                        .graphicsLayer {
-                            scaleX = sendScale
-                            scaleY = sendScale
-                        }
-                        .pressScale(0.86f)
-                        .size(44.dp),
-                    shape = CircleShape
+                // Нижний ряд как в Margy / ChatGPT: + · папка · отправить
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    AnimatedContent(
-                        targetState = viewModel.isGenerating,
-                        transitionSpec = {
-                            (scaleIn(spring(dampingRatio = 0.5f, stiffness = 400f)) + fadeIn()) togetherWith
-                                (scaleOut() + fadeOut())
+                    Box {
+                        IconButton(
+                            onClick = { showPlusMenu = true },
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            modifier = Modifier.pressScale(0.88f).size(40.dp).clip(CircleShape)
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "Добавить",
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .graphicsLayer { rotationZ = plusRotation }
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showPlusMenu,
+                            onDismissRequest = { showPlusMenu = false },
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Прикрепить файл") },
+                                leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
+                                onClick = {
+                                    showPlusMenu = false
+                                    openDocumentLauncher.launch(arrayOf("*/*"))
+                                }
+                            )
+                        }
+                    }
+
+                    // Чип папки — как FolderChip в Margy
+                    Surface(
+                        color = if (viewModel.workingFolderName != null)
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                        else Color.Transparent,
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable { showFolderDialog = true }
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Outlined.Folder,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                viewModel.workingFolderName ?: "Папка",
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .padding(start = 6.dp)
+                                    .widthIn(max = 130.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    val sendScale by animateFloatAsState(
+                        targetValue = if (canSend) 1f else 0.92f,
+                        animationSpec = spring(dampingRatio = 0.5f, stiffness = 420f),
+                        label = "send_scale"
+                    )
+                    FilledIconButton(
+                        onClick = {
+                            if (viewModel.isGenerating) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.stopGeneration()
+                            } else if (canSend) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.sendMessage(inputText)
+                                inputText = ""
+                            }
                         },
-                        label = "send_icon"
-                    ) { generating ->
-                        if (generating) {
-                            Box(contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(30.dp),
-                                    strokeWidth = 2.5.dp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                        enabled = canSend || viewModel.isGenerating,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = sendContainer,
+                            contentColor = sendContent,
+                            disabledContainerColor = sendContainer,
+                            disabledContentColor = sendContent
+                        ),
+                        modifier = Modifier
+                            .graphicsLayer {
+                                scaleX = sendScale
+                                scaleY = sendScale
+                            }
+                            .pressScale(0.86f)
+                            .size(44.dp),
+                        shape = CircleShape
+                    ) {
+                        AnimatedContent(
+                            targetState = viewModel.isGenerating,
+                            transitionSpec = {
+                                (scaleIn(spring(dampingRatio = 0.5f, stiffness = 400f)) + fadeIn()) togetherWith
+                                    (scaleOut() + fadeOut())
+                            },
+                            label = "send_icon"
+                        ) { generating ->
+                            if (generating) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(30.dp),
+                                        strokeWidth = 2.5.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Icon(
+                                        Icons.Default.Stop,
+                                        contentDescription = "Остановить",
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            } else {
                                 Icon(
-                                    Icons.Default.Stop,
-                                    contentDescription = "Остановить",
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.size(16.dp)
+                                    Icons.Default.ArrowUpward,
+                                    contentDescription = "Отправить",
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
-                        } else {
-                            Icon(
-                                Icons.Default.ArrowUpward,
-                                contentDescription = "Отправить",
-                                modifier = Modifier.size(24.dp)
-                            )
                         }
                     }
                 }
             }
         }
-    }
+    } // Column chat content
 
-    // Диалог выбора рабочей папки агента (реальный путь для OpenCode)
+        // Диалог выбора рабочей папки агента (реальный путь для OpenCode)
     if (showFolderDialog) {
         FolderPickerDialog(
             viewModel = viewModel,
@@ -650,6 +636,7 @@ fun ChatScreen(
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
+    } // Box root
 }
 
 @Composable
@@ -855,20 +842,31 @@ private fun MessageBubble(
     ) {
         Surface(
             shape = RoundedCornerShape(
-                topStart = 26.dp, topEnd = 26.dp,
-                bottomStart = if (isUser) 26.dp else 8.dp,
-                bottomEnd = if (isUser) 8.dp else 26.dp
+                topStart = 22.dp, topEnd = 22.dp,
+                bottomStart = if (isUser) 22.dp else 8.dp,
+                bottomEnd = if (isUser) 8.dp else 22.dp
             ),
-            color = if (isUser) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f)
-            else Color.Transparent,
-            tonalElevation = 0.dp,
-            modifier = Modifier.widthIn(max = 360.dp).animateContentSize()
+            color = if (isUser) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.78f)
+            else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.92f),
+            tonalElevation = if (isUser) 0.dp else 1.dp,
+            shadowElevation = if (isUser) 0.dp else 3.dp,
+            modifier = Modifier
+                .widthIn(max = 360.dp)
+                .padding(horizontal = if (isUser) 0.dp else 2.dp)
+                .animateContentSize()
         ) {
-            Column(modifier = Modifier.padding(if (isUser) 14.dp else 2.dp)) {
-                if (!isUser && message.modelName != null) {
-                    Text(message.modelName, style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                if (!isUser && !message.modelName.isNullOrBlank()) {
+                    Text(
+                        text = message.modelName.trim(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 1.dp, bottom = 2.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
                 }
 
                 Text(
