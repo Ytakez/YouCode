@@ -455,7 +455,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return p
     }
 
-    fun setPreferredFolder(path: String) {
+    fun applyPreferredFolder(path: String) {
         preferredFolder = path
         folderPrefs.edit().putString("path", path).apply()
         // Обновляем UI-чип
@@ -470,7 +470,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearPreferredFolder() {
-        setPreferredFolder("")
+        applyPreferredFolder("")
         clearWorkingFolder()
     }
 

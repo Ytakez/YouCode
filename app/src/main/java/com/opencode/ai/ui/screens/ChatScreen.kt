@@ -750,7 +750,7 @@ private fun FolderPickerDialog(
                     "phone" -> phone
                     else -> path.trim()
                 }
-                viewModel.setPreferredFolder(selected)
+                viewModel.applyPreferredFolder(selected)
                 onDismiss()
             }) { Text("Готово") }
         },
