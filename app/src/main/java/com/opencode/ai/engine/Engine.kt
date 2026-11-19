@@ -36,6 +36,9 @@ class Engine(private val context: Context) {
     private val binary: File get() = File(context.applicationInfo.nativeLibraryDir, "libopencode.so")
     private val dirs = EngineDirs(context)
 
+    /** Папка проекта: инструменты opencode читают и пишут файлы здесь. */
+    val workspacePath: String get() = dirs.workspace.absolutePath
+
     val available: Boolean get() = binary.exists()
     val running: Boolean get() = process?.isAlive == true
 
@@ -56,7 +59,9 @@ class Engine(private val context: Context) {
             .redirectOutput(dirs.log)
         builder.environment().apply {
             putAll(dirs.environment())
+            // Имя переменной менялось между версиями opencode: задаём оба, чтобы сервер точно был закрыт паролем.
             put("OPENCODE_SERVER_PASSWORD", password)
+            put("OPENCODE_PASSWORD", password)
         }
         process = builder.start()
 

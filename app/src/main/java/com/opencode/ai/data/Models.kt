@@ -23,13 +23,41 @@ data class AttachedFile(
     val isSavedByAi: Boolean = false
 )
 
+/** Часть ответа модели, как её отдаёт opencode: текст, рассуждения или вызов инструмента. */
+sealed interface MsgPart {
+    data class Text(val text: String) : MsgPart
+    data class Reasoning(val text: String, val ms: Long = 0) : MsgPart
+    data class Tool(
+        val name: String,
+        val status: String,
+        /** Главный аргумент для заголовка карточки (команда, файл, шаблон…). */
+        val arg: String?,
+        val input: String,
+        val output: String,
+        val error: String?
+    ) : MsgPart
+}
+
+/** Инструмент просит разрешения, как в самом opencode. */
+data class OcAsk(
+    val id: String,
+    val session: String,
+    val action: String,
+    val resources: List<String>,
+    val message: String?
+)
+
 data class ChatMessage(
     val id: String,
     val content: String,
     val isUser: Boolean,
     val timestamp: Long = System.currentTimeMillis(),
     val modelName: String? = null,
-    val attachments: List<AttachedFile> = emptyList()
+    val attachments: List<AttachedFile> = emptyList(),
+    val parts: List<MsgPart> = emptyList(),
+    val error: String? = null,
+    val tokensIn: Long = 0,
+    val tokensOut: Long = 0
 )
 
 data class ChatSession(
@@ -37,7 +65,9 @@ data class ChatSession(
     val title: String,
     val lastMessage: String,
     val timestamp: Long,
-    val messages: List<ChatMessage> = emptyList()
+    val messages: List<ChatMessage> = emptyList(),
+    /** Сессия opencode этого чата: в ней живёт контекст, инструменты и история хода. */
+    val ocSessionId: String? = null
 )
 
 data class ProviderItem(

@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Login
+import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Code
@@ -60,7 +61,8 @@ fun AppDrawer(
     onProvidersClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onModelsClick: () -> Unit,
-    onSkillsClick: () -> Unit = {}
+    onSkillsClick: () -> Unit = {},
+    onSignOut: (() -> Unit)? = null
 ) {
     val startOfToday = java.util.Calendar.getInstance().apply {
         set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -75,8 +77,9 @@ fun AppDrawer(
         modifier = Modifier
             .fillMaxHeight()
             .width(300.dp),
+        shape = RoundedCornerShape(topEnd = Expressive.Card, bottomEnd = Expressive.Card),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 2.dp
+        tonalElevation = 0.dp
     ) {
         Column(
             modifier = Modifier
@@ -86,7 +89,7 @@ fun AppDrawer(
         ) {
             // Brand panel
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(Expressive.Card),
                 color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -96,38 +99,13 @@ fun AppDrawer(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val shimmer = rememberInfiniteTransition(label = "brand_shimmer")
-                    val shift by shimmer.animateFloat(
-                        initialValue = 0f,
-                        targetValue = 160f,
-                        animationSpec = infiniteRepeatable(tween(3200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-                        label = "brand_shift"
+                    ExpressiveIconBadge(
+                        icon = Icons.Outlined.Code,
+                        size = 48.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        container = MaterialTheme.colorScheme.primary,
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
-                    Box(
-                        modifier = Modifier
-                            .floating(amplitude = 3.dp, periodMs = 2600)
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.surface,
-                                        MaterialTheme.colorScheme.tertiaryContainer,
-                                        MaterialTheme.colorScheme.secondaryContainer
-                                    ),
-                                    start = Offset(shift, 0f),
-                                    end = Offset(shift + 120f, 120f)
-                                )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Outlined.Code,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(25.dp)
-                        )
-                    }
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text(
@@ -214,6 +192,13 @@ fun AppDrawer(
                 label = "Настройки",
                 onClick = onSettingsClick
             )
+            if (onSignOut != null) {
+                DrawerItem(
+                    icon = Icons.AutoMirrored.Outlined.Logout,
+                    label = "Выйти из аккаунта",
+                    onClick = onSignOut
+                )
+            }
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -231,10 +216,10 @@ private fun DrawerItem(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
             .pressScale(0.96f)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(Expressive.Card))
             .clickable(onClick = onClick)
             .background(
-                if (highlighted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                if (highlighted) MaterialTheme.colorScheme.primaryContainer
                 else androidx.compose.ui.graphics.Color.Transparent
             )
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -244,16 +229,16 @@ private fun DrawerItem(
             icon,
             contentDescription = null,
             modifier = Modifier.size(22.dp),
-            tint = if (highlighted) MaterialTheme.colorScheme.primary
+            tint = if (highlighted) MaterialTheme.colorScheme.onPrimaryContainer
             else MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.width(16.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.bodyLarge,
-            color = if (highlighted) MaterialTheme.colorScheme.onSurface
+            color = if (highlighted) MaterialTheme.colorScheme.onPrimaryContainer
             else MaterialTheme.colorScheme.onSurface,
-            fontWeight = if (highlighted) FontWeight.Medium else FontWeight.Normal
+            fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Normal
         )
     }
 }
@@ -271,7 +256,7 @@ private fun SessionItem(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
             .pressScale(0.97f)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(Expressive.Card))
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     )

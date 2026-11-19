@@ -31,8 +31,15 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.ui.graphics.Color
+import com.opencode.ai.ui.components.Expressive
+import com.opencode.ai.ui.components.ExpressiveCard
+import com.opencode.ai.ui.components.ExpressiveIconBadge
+import com.opencode.ai.ui.components.ExpressivePill
+import com.opencode.ai.ui.components.groupShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -80,13 +87,18 @@ fun ProvidersScreen(
                 val hasBase = prefs.getString("base_${provider.id}", "").orEmpty().isNotBlank()
                 val configured = if (provider.id == "opencode-server") hasBase else
                     hasBase && prefs.getString("model_${provider.id}", "").orEmpty().isNotBlank() &&
-                        prefs.getString("key_${provider.id}", "").orEmpty().isNotBlank()
+                        (provider.id == "custom-cloud" ||
+                            prefs.getString("key_${provider.id}", "").orEmpty().isNotBlank())
                 if (configured) put(provider.id, "configured")
             }
         }
     }
-    viewModel?.openCodeProviders?.forEach { provider ->
-        if (provider.id !in savedKeys) savedKeys[provider.id] = ""
+    val liveProviderCount = viewModel?.openCodeProviders?.size ?: 0
+    LaunchedEffect(liveProviderCount) {
+        // Не пишем в состояние прямо во время композиции: иначе лишние рекомпозиции экрана.
+        viewModel?.openCodeProviders?.forEach { provider ->
+            if (provider.id !in savedKeys) savedKeys[provider.id] = ""
+        }
     }
     var dialogItem by remember { mutableStateOf<ProviderItem?>(null) }
     var oauthAttempt by remember { mutableStateOf<Pair<String, JSONObject>?>(null) }
@@ -162,9 +174,10 @@ fun ProvidersScreen(
                     item = item,
                     connected = !savedKeys[item.id].isNullOrBlank(),
                     onClick = { dialogItem = item },
+                    shape = groupShape(index, featured.size),
                     modifier = Modifier.entrance(index)
                 )
-                Spacer(Modifier.height(10.dp))
+                if (index < featured.lastIndex) Spacer(Modifier.height(Expressive.Gap))
             }
 
             if (liveProviders.isNotEmpty()) {
@@ -176,8 +189,9 @@ fun ProvidersScreen(
                     modifier = Modifier.padding(vertical = 6.dp))
                 liveProviders.forEachIndexed { index, item ->
                     ProviderCard(item, !savedKeys[item.id].isNullOrBlank(), onClick = { dialogItem = item },
+                        shape = groupShape(index, liveProviders.size),
                         modifier = Modifier.entrance(index))
-                    Spacer(Modifier.height(8.dp))
+                    if (index < liveProviders.lastIndex) Spacer(Modifier.height(Expressive.Gap))
                 }
             }
             viewModel?.openCodeCatalogError?.let { error ->
@@ -195,38 +209,48 @@ fun ProvidersScreen(
             )
             Spacer(Modifier.height(10.dp))
 
-            OutlinedTextField(
+            TextField(
                 value = search,
                 onValueChange = { search = it },
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("Поиск") },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                shape = RoundedCornerShape(32.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                shape = RoundedCornerShape(Expressive.Card),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent
                 ),
                 singleLine = true
             )
 
             Spacer(Modifier.height(14.dp))
 
-            keyProviders.forEach { item ->
+            keyProviders.forEachIndexed { index, item ->
                 val connected = !savedKeys[item.id].isNullOrBlank()
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { dialogItem = item }
-                        .padding(vertical = 12.dp)
+                ExpressiveCard(
+                    onClick = { dialogItem = item },
+                    shape = groupShape(index, keyProviders.size, outer = Expressive.CardSmall),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(item.name, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        if (connected) "подключён" else "ключ",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (connected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(item.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                            Text(
+                                if (connected) "подключён" else "ключ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (connected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
+                if (index < keyProviders.lastIndex) Spacer(Modifier.height(Expressive.Gap))
             }
 
             catalogMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall,
@@ -251,14 +275,17 @@ fun ProvidersScreen(
             currentModel = prefs.getString("model_${item.id}", if (item.id == "opencode-server") "server-default" else "") ?: "",
             currentProtocol = prefs.getString("protocol_${item.id}", if (item.id == "claude") "anthropic" else "openai") ?: "openai",
             onSaveCustom = { url, key, model, protocol ->
+                val ready = url.isNotBlank() &&
+                    (item.id == "opencode-server" || (model.isNotBlank() && (key.isNotBlank() || item.id == "custom-cloud")))
                 prefs.edit().putString("base_${item.id}", url)
                     .putString("key_${item.id}", key)
                     .putString("model_${item.id}", model)
                     .putString("protocol_${item.id}", protocol)
-                    .putString("active_provider", item.id).apply()
-                savedKeys[item.id] = if (url.isNotBlank() && (item.id == "opencode-server" || (model.isNotBlank() && key.isNotBlank()))) "configured" else ""
+                    // «Отключить» не должно оставлять активным провайдер без адреса.
+                    .putString("active_provider", if (ready) item.id else "opencode-server").apply()
+                savedKeys[item.id] = if (ready) "configured" else ""
                 dialogItem = null
-                if (item.id == "opencode-server") viewModel?.refreshOpenCodeModels()
+                if (item.id == "opencode-server" || url.isBlank()) viewModel?.refreshOpenCodeModels()
             },
             onSave = { key ->
                 if (item.category == "opencode-live") {
@@ -393,7 +420,12 @@ private fun KeyDialog(
                     if (custom) onSaveCustom(url.trim(), text.trim(), model.trim(), protocol)
                     else onSave(text.trim())
                 },
-                enabled = if (item.id == "opencode-server") url.isNotBlank() else if (custom) url.isNotBlank() && model.isNotBlank() && text.isNotBlank() else text.isNotBlank()
+                enabled = when {
+                    item.id == "opencode-server" -> url.isNotBlank()
+                    custom -> url.isNotBlank() && model.isNotBlank() &&
+                        (text.isNotBlank() || item.id == "custom-cloud")
+                    else -> text.isNotBlank()
+                }
             ) { Text("Сохранить") }
         },
         dismissButton = {
@@ -408,39 +440,42 @@ private fun KeyDialog(
 }
 
 @Composable
-private fun ProviderCard(item: ProviderItem, connected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
+private fun ProviderCard(
+    item: ProviderItem,
+    connected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(Expressive.Card)
+) {
+    ExpressiveCard(
         onClick = onClick,
-        shape = RoundedCornerShape(26.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = modifier.fillMaxWidth().pressScale(0.97f)
+        shape = shape,
+        modifier = modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
             verticalAlignment = Alignment.Top
         ) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                modifier = Modifier.size(40.dp)
-            ) {
-                Icon(
-                    Icons.Outlined.Code,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(10.dp).size(20.dp)
-                )
-            }
-            Spacer(Modifier.width(14.dp))
-            Column {
+            ExpressiveIconBadge(
+                icon = Icons.Outlined.Code,
+                container = if (connected) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.secondaryContainer,
+                tint = if (connected) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
                 Text(item.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(4.dp))
-                Text(item.description, style = MaterialTheme.typography.bodySmall,
+                Spacer(Modifier.height(2.dp))
+                Text(item.description, style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (connected) {
-                    Spacer(Modifier.height(6.dp))
-                    Text("подключён", style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(10.dp))
+                    ExpressivePill(
+                        "подключён",
+                        container = MaterialTheme.colorScheme.primaryContainer,
+                        content = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
                 }
             }
         }

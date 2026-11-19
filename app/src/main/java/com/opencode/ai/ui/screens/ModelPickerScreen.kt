@@ -1,5 +1,9 @@
 package com.opencode.ai.ui.screens
 
+import com.opencode.ai.ui.components.Expressive
+import com.opencode.ai.ui.components.ExpressiveCard
+import com.opencode.ai.ui.components.ExpressivePill
+import com.opencode.ai.ui.components.groupShape
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -116,14 +120,42 @@ fun ModelPickerScreen(
 
         LazyColumn(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(Expressive.Gap),
             modifier = Modifier.fillMaxSize()
         ) {
+            if (viewModel.filteredModels.isEmpty()) {
+                item(key = "catalog_empty") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            if (viewModel.searchQuery.isNotBlank()) "Ничего не найдено" else "Каталог моделей пуст",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            viewModel.openCodeCatalogError
+                                ?: when (viewModel.engineState) {
+                                    "starting" -> "Встроенный OpenCode ещё запускается — подожди несколько секунд."
+                                    "error" -> "OpenCode не запустился: ${viewModel.engineError.orEmpty().ifBlank { "неизвестная ошибка" }}"
+                                    "missing" -> "В этой сборке нет движка OpenCode (libopencode.so)."
+                                    else -> "Подключи OpenCode Server в «Провайдерах» и обнови список."
+                                },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+            }
             itemsIndexed(viewModel.filteredModels, key = { _, it -> "${it.remoteProviderId ?: it.provider}/${it.id}" }) { index, model ->
                 ModelItem(
                     modifier = Modifier.animateItem(fadeInSpec = null).entrance(index = index, enabled = index < 10, fromY = 20.dp),
                     model = model,
                     isSelected = model.id == viewModel.currentModel.id && model.remoteProviderId == viewModel.currentModel.remoteProviderId,
+                    shape = groupShape(index, viewModel.filteredModels.size),
                     onClick = { onModelSelected(model) }
                 )
             }
@@ -133,69 +165,56 @@ fun ModelPickerScreen(
 }
 
 @Composable
-private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun ModelItem(
+    model: AiModel,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    shape: androidx.compose.ui.graphics.Shape,
+    modifier: Modifier = Modifier
+) {
     val container by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer,
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
         animationSpec = spring(stiffness = 400f),
         label = "model_item_color"
     )
-    Surface(
+    val onContainer = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+    ExpressiveCard(
         onClick = onClick,
-        shape = RoundedCornerShape(24.dp),
+        shape = shape,
         color = container,
-        modifier = modifier
-            .fillMaxWidth()
-            .pressScale(0.97f)
-            .then(
-                if (isSelected) Modifier.border(
-                    1.5.dp,
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
-                    RoundedCornerShape(24.dp)
-                ) else Modifier
-            )
+        contentColor = onContainer,
+        modifier = modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 15.dp),
+                .padding(horizontal = 18.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Live indicator
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
-            )
-            Spacer(Modifier.width(14.dp))
-
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = model.name,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    fontWeight = FontWeight.SemiBold,
+                    color = onContainer
                 )
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-                        Text(
-                            text = model.contextSize,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                        Text(
-                            text = if (model.isFree) "бесплатно" else model.provider,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
+                    ExpressivePill(
+                        text = model.contextSize,
+                        container = if (isSelected) MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
+                        else MaterialTheme.colorScheme.surfaceContainerHighest,
+                        content = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    ExpressivePill(
+                        text = if (model.isFree) "бесплатно" else model.provider,
+                        container = if (isSelected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.secondaryContainer,
+                        content = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSecondaryContainer
+                    )
                 }
             }
 
@@ -203,7 +222,7 @@ private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit, 
                 imageVector = if (model.isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
                 contentDescription = "Избранное",
                 tint = if (model.isFavorite) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.size(22.dp)
             )
         }

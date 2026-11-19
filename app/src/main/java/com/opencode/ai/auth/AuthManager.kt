@@ -35,7 +35,8 @@ class AuthManager(private val context: Context) {
     suspend fun startTelegramLogin(): TelegramLogin = withContext(Dispatchers.IO) {
         val (code, json) = functionRequest(JSONObject().put("action", "start"))
         if (code !in 200..299 || json.optString("token").isBlank() || json.optString("url").isBlank()) {
-            throw AuthHttpException(code, "Не удалось начать вход через Telegram ($code)")
+            // Код 200 тут значит «сервер ответил, но не токеном и ссылкой»: показываем, что именно пришло.
+            throw AuthHttpException(code, "Не удалось начать вход через Telegram ($code): ${serverDetail(json)}")
         }
         TelegramLogin(json.getString("token"), json.getString("url"))
     }
@@ -49,7 +50,9 @@ class AuthManager(private val context: Context) {
         }
         when {
             code == 410 -> throw AuthHttpException(code, "Ссылка для входа устарела. Попробуйте ещё раз.")
-            code !in 200..299 -> throw AuthHttpException(code, "Ошибка входа через Telegram ($code)")
+            // Временный сбой сервера (5xx) не должен обрывать вход: продолжаем опрашивать.
+            code >= 500 -> null
+            code !in 200..299 -> throw AuthHttpException(code, "Ошибка входа через Telegram ($code): ${serverDetail(json)}")
             json.optString("status") == "ok" -> sessionFrom(json).also(::save)
             else -> null
         }
@@ -64,8 +67,15 @@ class AuthManager(private val context: Context) {
         val code = c.responseCode
         val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
         c.disconnect()
-        return code to runCatching { JSONObject(text) }.getOrDefault(JSONObject())
+        return code to runCatching { JSONObject(text) }.getOrElse { JSONObject().put("_raw", text.take(300)) }
     }
+
+    /** Что вернул сервер вместо ожидаемого ответа: поле error/detail или начало тела. */
+    private fun serverDetail(json: JSONObject): String =
+        listOf("detail", "error", "message", "msg", "_raw")
+            .map { json.optString(it) }
+            .firstOrNull { it.isNotBlank() }
+            ?: "пустой ответ"
 
     /**
      * Обновляет токены по refresh_token. Если Supabase отклонил сессию (400/401/403) — выходим из аккаунта и возвращаем null.

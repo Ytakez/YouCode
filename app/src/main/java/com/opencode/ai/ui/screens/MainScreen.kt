@@ -24,8 +24,11 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -48,6 +51,7 @@ fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(Screen.CHAT) }
     var showModelPicker by remember { mutableStateOf(false) }
+    var showSignOutDialog by remember { mutableStateOf(false) }
 
     // Predictive back (Android 14+): экран уменьшается и скругляется под жестом «назад».
     var backProgress by remember { mutableFloatStateOf(0f) }
@@ -98,6 +102,12 @@ fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
                     scope.launch { drawerState.close() }
                     currentScreen = Screen.SKILLS_MCP
                 },
+                onSignOut = onSignOut?.let {
+                    {
+                        scope.launch { drawerState.close() }
+                        showSignOutDialog = true
+                    }
+                }
             )
         },
         gesturesEnabled = true
@@ -128,7 +138,7 @@ fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
                             animationSpec = spring(dampingRatio = 0.9f, stiffness = 480f)
                         ) { -dir * it / 9 } +
                             fadeOut(spring(stiffness = 700f)) +
-                            scaleOut(spring(stiffness = 500f), targetScale = 0.96f))
+                            scaleOut(spring(stiffness = 500f), targetScale = 0.96f)) using SizeTransform(clip = false)
                 },
                 label = "screen_transition"
             ) { screen ->
@@ -169,5 +179,22 @@ fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
                 )
             }
         }
+    }
+
+    if (showSignOutDialog) {
+        AlertDialog(
+            onDismissRequest = { showSignOutDialog = false },
+            title = { Text("Выйти из аккаунта?") },
+            text = { Text("Чаты и настройки провайдеров на этом устройстве будут удалены.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSignOutDialog = false
+                    onSignOut?.invoke()
+                }) { Text("Выйти") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSignOutDialog = false }) { Text("Отмена") }
+            }
+        )
     }
 }

@@ -78,7 +78,31 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.TaskAlt
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import com.opencode.ai.data.MsgPart
+import com.opencode.ai.data.OcAsk
+import com.opencode.ai.ui.components.Markdown
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Terminal
+import com.opencode.ai.ui.components.Expressive
+import com.opencode.ai.ui.components.ExpressiveCard
+import com.opencode.ai.ui.components.ExpressiveIconBadge
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.InsertDriveFile
@@ -127,6 +151,7 @@ fun ChatScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
+    Asks(viewModel)
     // id сообщений, которые уже проигрывали анимацию появления (чтобы не повторять при прокрутке)
     val animatedIds = remember { mutableSetOf<String>() }
     val topBarElevation by animateDpAsState(
@@ -204,10 +229,14 @@ fun ChatScreen(
     }
 
     // Keep the thinking block and newest messages in view; avoids the indicator covering a bubble.
-    LaunchedEffect(viewModel.messages.size, viewModel.isGenerating, viewModel.generationStatus, viewModel.generationActivities.size) {
+    LaunchedEffect(viewModel.messages.size, viewModel.isGenerating, viewModel.generationStatus, viewModel.liveShown().sumOf { when (it) { is MsgPart.Text -> it.text.length; is MsgPart.Reasoning -> it.text.length; else -> 1 } } / 200) {
         if (viewModel.messages.isEmpty() && !viewModel.isGenerating) return@LaunchedEffect
         val target = (viewModel.messages.size - 1 + if (viewModel.isGenerating) 1 else 0).coerceAtLeast(0)
-        listState.animateScrollToItem(target)
+        // Если человек читает историю выше, ленту не дёргаем: иначе каждый статус возвращал вниз.
+        val info = listState.layoutInfo
+        val nearBottom = info.totalItemsCount == 0 ||
+            (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - 2
+        if (nearBottom) listState.animateScrollToItem(target)
     }
 
     Column(
@@ -266,12 +295,8 @@ fun ChatScreen(
                 Surface(
                     onClick = onModelClick,
                     modifier = Modifier.pressScale(0.94f),
-                    shape = RoundedCornerShape(22.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                    )
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.secondaryContainer
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -346,7 +371,7 @@ fun ChatScreen(
                         item(key = "typing_indicator") {
                             GenerationActivity(
                                 status = viewModel.generationStatus,
-                                activities = viewModel.generationActivities,
+                                parts = viewModel.liveShown(),
                                 modifier = Modifier
                                     .animateItem(fadeInSpec = null, fadeOutSpec = null)
                                     .padding(top = 6.dp, bottom = 8.dp)
@@ -382,8 +407,8 @@ fun ChatScreen(
         // Working folder chip
         if (viewModel.workingFolderName != null) {
             Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                shape = RoundedCornerShape(Expressive.CardSmall),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 4.dp)
@@ -625,8 +650,8 @@ private fun EmptyChatState(onSuggestion: (String) -> Unit) {
         verticalArrangement = Arrangement.Center
     ) {
         Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = RoundedCornerShape(32.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
             modifier = Modifier
                 .size(88.dp)
                 .entrance(index = 0, fromY = 24.dp)
@@ -636,7 +661,7 @@ private fun EmptyChatState(onSuggestion: (String) -> Unit) {
                     Icons.Outlined.Code,
                     contentDescription = null,
                     modifier = Modifier.size(40.dp),
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
         }
@@ -664,31 +689,44 @@ private fun EmptyChatState(onSuggestion: (String) -> Unit) {
 
         Spacer(Modifier.height(28.dp))
 
+        val suggestionIcons = listOf(
+            Icons.Outlined.Lightbulb, Icons.Outlined.BugReport,
+            Icons.Outlined.Terminal, Icons.Outlined.Description
+        )
         suggestions.chunked(2).forEachIndexed { rowIndex, rowItems ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 rowItems.forEachIndexed { colIndex, (label, prompt) ->
-                    Surface(
+                    ExpressiveCard(
                         onClick = { onSuggestion(prompt) },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(Expressive.CardSmall),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-                        ),
                         modifier = Modifier
+                            .weight(1f)
                             .entrance(index = 3 + rowIndex * 2 + colIndex)
-                            .pressScale(0.96f)
                     ) {
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                        )
+                        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                            ExpressiveIconBadge(
+                                icon = suggestionIcons[(rowIndex * 2 + colIndex) % suggestionIcons.size],
+                                size = 40.dp,
+                                shape = RoundedCornerShape(14.dp),
+                                container = MaterialTheme.colorScheme.secondaryContainer,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -706,11 +744,11 @@ private fun MessageBubble(
     ) {
         Surface(
             shape = RoundedCornerShape(
-                topStart = 26.dp, topEnd = 26.dp,
-                bottomStart = if (isUser) 26.dp else 8.dp,
-                bottomEnd = if (isUser) 8.dp else 26.dp
+                topStart = Expressive.Card, topEnd = Expressive.Card,
+                bottomStart = if (isUser) Expressive.Card else Expressive.Joint,
+                bottomEnd = if (isUser) Expressive.Joint else Expressive.Card
             ),
-            color = if (isUser) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f)
+            color = if (isUser) MaterialTheme.colorScheme.secondaryContainer
             else Color.Transparent,
             tonalElevation = 0.dp,
             modifier = Modifier.widthIn(max = 360.dp).animateContentSize()
@@ -722,13 +760,44 @@ private fun MessageBubble(
                     Spacer(Modifier.height(6.dp))
                 }
 
-                Text(
-                    message.content,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer
-                    else MaterialTheme.colorScheme.onSurface,
-                    lineHeight = 22.sp
-                )
+                if (isUser) {
+                    Text(
+                        message.content,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        lineHeight = 22.sp
+                    )
+                } else if (message.parts.isNotEmpty()) {
+                    AssistantParts(message.parts, live = false)
+                } else if (message.content.isNotBlank()) {
+                    SelectionContainer { Markdown(message.content.trim()) }
+                }
+                if (!isUser && message.error != null) {
+                    Spacer(Modifier.height(6.dp))
+                    ErrorCard(message.error)
+                }
+                if (!isUser && message.content.isNotBlank()) {
+                    val clipboard = LocalClipboardManager.current
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { clipboard.setText(AnnotatedString(message.content.trim())) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.ContentCopy, "Копировать", Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (message.tokensOut > 0) {
+                            Text(
+                                "${message.tokensIn} → ${message.tokensOut}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.padding(start = 6.dp)
+                            )
+                        }
+                    }
+                }
 
                 if (message.attachments.isNotEmpty()) {
                     Spacer(Modifier.height(10.dp))
@@ -744,23 +813,26 @@ private fun MessageBubble(
 
 @Composable
 private fun FileChip(file: AttachedFile, onClick: () -> Unit) {
-    Surface(
+    ExpressiveCard(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth().pressScale(0.97f)
+        shape = RoundedCornerShape(Expressive.CardSmall),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                if (file.isSavedByAi) Icons.Outlined.Download else Icons.Outlined.InsertDriveFile,
-                contentDescription = null, modifier = Modifier.size(18.dp),
-                tint = if (file.isSavedByAi) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            ExpressiveIconBadge(
+                icon = if (file.isSavedByAi) Icons.Outlined.Download else Icons.Outlined.InsertDriveFile,
+                size = 36.dp,
+                shape = RoundedCornerShape(12.dp),
+                container = if (file.isSavedByAi) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.secondaryContainer,
+                tint = if (file.isSavedByAi) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.onSecondaryContainer
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(file.name, style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -778,12 +850,11 @@ private fun FileChip(file: AttachedFile, onClick: () -> Unit) {
 @Composable
 private fun PendingFileChip(file: AttachedFile, onRemove: () -> Unit) {
     Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
     ) {
         Row(
-            modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(16.dp),
@@ -800,15 +871,15 @@ private fun PendingFileChip(file: AttachedFile, onRemove: () -> Unit) {
     }
 }
 
+/** Индикатор работы и то, что модель делает сейчас: рассуждения, инструменты, текст — как у Margy. */
 @Composable
-private fun GenerationActivity(status: String, activities: List<String>, modifier: Modifier = Modifier) {
+private fun GenerationActivity(status: String, parts: List<MsgPart>, modifier: Modifier = Modifier) {
     val infinite = rememberInfiniteTransition(label = "activity")
     val rotation by infinite.animateFloat(
         initialValue = 0f, targetValue = 360f,
         animationSpec = infiniteRepeatable(tween(1800, easing = androidx.compose.animation.core.LinearEasing)),
         label = "activity_rotation"
     )
-    // Separate column so the thinking block never draws over the previous message bubble.
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -819,90 +890,169 @@ private fun GenerationActivity(status: String, activities: List<String>, modifie
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(22.dp)) {
-                CircularProgressIndicator(
-                    progress = 0.72f,
-                    modifier = Modifier
-                        .size(20.dp)
-                        .graphicsLayer { rotationZ = rotation },
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            }
+            CircularProgressIndicator(
+                progress = { 0.72f },
+                modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = rotation },
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
             Text(
-                "Работаю над запросом",
+                status.ifBlank { "Подключаюсь…" },
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-            )
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(9.dp)
-            ) {
-                Icon(
-                    Icons.Outlined.Code,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(17.dp)
-                )
-                Text(
-                    status.ifBlank { "Подключаюсь…" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        activities.takeLast(6).forEach { activity ->
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                )
-            ) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 11.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        Icons.Outlined.Code,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                        activity,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+        AssistantParts(parts, live = true)
+    }
+}
+
+/** Части ответа: рассуждения, карточки инструментов и текст. Одно и то же для живого и готового ответа. */
+@Composable
+private fun AssistantParts(parts: List<MsgPart>, live: Boolean) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        parts.forEachIndexed { i, p ->
+            when (p) {
+                is MsgPart.Reasoning -> Thoughts(p, live && i == parts.lastIndex)
+                is MsgPart.Text -> {
+                    // Некоторые модели пишут рассуждения прямо в ответ между тегами <think>.
+                    val t = p.text.trimStart()
+                    if (t.startsWith("<think>")) {
+                        val end = t.indexOf("</think>")
+                        val thought = if (end < 0) t.removePrefix("<think>") else t.substring(7, end)
+                        Thoughts(MsgPart.Reasoning(thought), live && end < 0)
+                        val rest = if (end < 0) "" else t.substring(end + 8).trim()
+                        if (rest.isNotEmpty()) SelectionContainer { Markdown(rest) }
+                    } else if (p.text.isNotBlank()) {
+                        SelectionContainer { Markdown(p.text.trim()) }
+                    }
                 }
+                is MsgPart.Tool -> ToolCard(p)
             }
         }
-        if (activities.isNotEmpty()) {
+    }
+}
+
+@Composable
+private fun Thoughts(p: MsgPart.Reasoning, live: Boolean) {
+    var open by remember { mutableStateOf(false) }
+    if (p.text.isBlank()) return
+    Column {
+        Row(
+            Modifier.clip(RoundedCornerShape(12.dp)).clickable { open = !open }.padding(vertical = 6.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.Psychology, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
             Text(
-                "Реальные действия OpenCode, не скрытые рассуждения модели",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+                if (live) "Думает…"
+                else if (p.ms > 0) "Думал ${"%.1f".format(p.ms / 1000.0)} с"
+                else "Размышления",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 6.dp)
+            )
+            Icon(
+                if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        androidx.compose.animation.AnimatedVisibility(open || live) {
+            Row(Modifier.height(IntrinsicSize.Min).padding(start = 12.dp, top = 4.dp, bottom = 4.dp)) {
+                Box(Modifier.padding(end = 12.dp).width(2.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outlineVariant))
+                Text(
+                    if (live && !open) p.text.takeLast(600) else p.text.trim(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = if (live && !open) 6 else Int.MAX_VALUE,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/** Что сделал инструмент, одной строкой; детали раскрываются по нажатию. */
+@Composable
+private fun ToolCard(t: MsgPart.Tool) {
+    var open by remember { mutableStateOf(false) }
+    ExpressiveCard(
+        onClick = { open = !open },
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(Expressive.CardSmall),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when (t.status) {
+                    "completed" -> Icon(Icons.Outlined.TaskAlt, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                    "error" -> Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+                    else -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                }
+                Text(
+                    if (t.arg != null) "${t.name}: ${t.arg}" else t.name,
+                    style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 10.dp).weight(1f)
+                )
+                Icon(
+                    if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            androidx.compose.animation.AnimatedVisibility(open) {
+                val body = listOfNotNull(t.input.ifBlank { null }, t.error, t.output.ifBlank { null }).joinToString("\n\n")
+                Text(
+                    body.take(6000), fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 10.dp).horizontalScroll(rememberScrollState())
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ErrorCard(e: String) {
+    ExpressiveCard(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = RoundedCornerShape(Expressive.CardSmall),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(16.dp)) {
+            Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onErrorContainer)
+            Text(
+                e, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.padding(start = 12.dp)
             )
         }
     }
+}
+
+/** OpenCode спрашивает разрешения, прежде чем инструмент что-то изменит. */
+@Composable
+private fun Asks(viewModel: ChatViewModel) {
+    val ask: OcAsk = viewModel.asks.firstOrNull() ?: return
+    AlertDialog(
+        onDismissRequest = {},
+        icon = { Icon(Icons.Outlined.Build, null) },
+        title = { Text("Разрешить: ${ask.action}?") },
+        text = {
+            Column {
+                ask.message?.let { Text(it) }
+                for (r in ask.resources.take(6)) Text(
+                    r, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        },
+        confirmButton = {
+            Row {
+                TextButton({ viewModel.replyAsk(ask, "always") }) { Text("Всегда") }
+                TextButton({ viewModel.replyAsk(ask, "once") }) { Text("Разрешить") }
+            }
+        },
+        dismissButton = { TextButton({ viewModel.replyAsk(ask, "reject") }) { Text("Запретить") } }
+    )
 }
 
 private const val MAX_ATTACH_READ_BYTES = 256 * 1024

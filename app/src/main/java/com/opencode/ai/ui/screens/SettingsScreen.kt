@@ -1,5 +1,3 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-
 package com.opencode.ai.ui.screens
 
 import androidx.compose.animation.animateColorAsState
@@ -17,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,10 +28,16 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import com.opencode.ai.ui.components.Expressive
+import com.opencode.ai.ui.components.ExpressiveCard
+import com.opencode.ai.ui.components.ExpressiveIconBadge
+import com.opencode.ai.ui.components.groupShape
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -53,6 +58,7 @@ import com.opencode.ai.data.SampleData
 import com.opencode.ai.data.SmartMode
 import com.opencode.ai.viewmodel.ChatViewModel
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignOut: (() -> Unit)? = null) {
     var showModePicker by remember { mutableStateOf(false) }
@@ -85,50 +91,47 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignO
             Text("Выбери, как YouCode будет подбирать модель для ответов.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            Surface(
+            ExpressiveCard(
                 onClick = { showModePicker = true },
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f)),
-                modifier = Modifier.fillMaxWidth().entrance(1).pressScale(0.97f).animateContentSize()
+                shape = RoundedCornerShape(Expressive.Card),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.fillMaxWidth().entrance(1).animateContentSize()
             ) {
-                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        Icon(
-                            Icons.Outlined.Tune,
-                            contentDescription = null,
-                            modifier = Modifier.padding(12.dp).size(24.dp),
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-                    Spacer(Modifier.width(14.dp))
+                Row(Modifier.padding(horizontal = 20.dp, vertical = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ExpressiveIconBadge(
+                        icon = Icons.Outlined.Tune,
+                        size = 52.dp,
+                        shape = RoundedCornerShape(18.dp),
+                        container = MaterialTheme.colorScheme.primary,
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Режим работы", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Режим работы", style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f))
                         Text(currentMode?.name ?: "Выбрать режим", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        Text(currentMode?.description ?: "Нажми, чтобы выбрать", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(currentMode?.description ?: "Нажми, чтобы выбрать", style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f))
                     }
-                    Icon(Icons.Default.ExpandMore, contentDescription = "Выбрать режим", tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Default.ExpandMore, contentDescription = "Выбрать режим")
                 }
             }
 
             Text("Текущая модель", style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(top = 12.dp).entrance(2))
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
+            ExpressiveCard(
+                shape = RoundedCornerShape(Expressive.Card),
                 modifier = Modifier.fillMaxWidth().entrance(3)
             ) {
-                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(12.dp))
+                Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ExpressiveIconBadge(icon = Icons.Outlined.CheckCircle)
+                    Spacer(Modifier.width(16.dp))
                     Column {
-                        Text(viewModel?.currentModel?.name ?: "Модель не выбрана", fontWeight = FontWeight.Medium)
+                        Text(viewModel?.currentModel?.name ?: "Модель не выбрана", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         Text(viewModel?.currentModel?.provider ?: "Выбери модель в меню чата",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -137,21 +140,26 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignO
             Text("Оформление", style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.entrance(4))
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
+            ExpressiveCard(
+                shape = RoundedCornerShape(Expressive.Card),
                 modifier = Modifier.fillMaxWidth().entrance(5)
             ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Material Design 3", fontWeight = FontWeight.Medium)
+                Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+                    Text("Material Design 3 Expressive", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(2.dp))
                     Text("Нейтральные поверхности в духе Grok, динамические акценты системы.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (onSignOut != null) {
-                OutlinedButton(
+                FilledTonalButton(
                     onClick = { showSignOutDialog = true },
-                    modifier = Modifier.fillMaxWidth().entrance(6)
+                    shape = RoundedCornerShape(Expressive.Card),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(56.dp).entrance(6)
                 ) { Text("Выйти из аккаунта") }
             }
             Text("YouCode · версия ${com.opencode.ai.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelMedium,
@@ -166,7 +174,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignO
             text = { Text("Чаты и настройки провайдеров на этом устройстве будут удалены.") },
             confirmButton = { TextButton(onClick = { showSignOutDialog = false; onSignOut() }) { Text("Выйти") } },
             dismissButton = { TextButton(onClick = { showSignOutDialog = false }) { Text("Отмена") } },
-            shape = RoundedCornerShape(20.dp)
+            shape = RoundedCornerShape(Expressive.Card)
         )
     }
 
@@ -175,9 +183,18 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignO
             onDismissRequest = { showModePicker = false },
             title = { Text("Выбери режим") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    SampleData.smartModes.forEach { mode ->
-                        ModeOption(mode, selected = currentMode?.id == mode.id) {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(Expressive.Gap)
+                ) {
+                    SampleData.smartModes.forEachIndexed { index, mode ->
+                        ModeOption(
+                            mode,
+                            selected = currentMode?.id == mode.id,
+                            shape = groupShape(index, SampleData.smartModes.size, outer = Expressive.CardSmall)
+                        ) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             viewModel?.selectMode(mode)
                             showModePicker = false
@@ -186,22 +203,30 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignO
                 }
             },
             confirmButton = { TextButton(onClick = { showModePicker = false }) { Text("Закрыть") } },
-            shape = RoundedCornerShape(20.dp)
+            shape = RoundedCornerShape(Expressive.Card)
         )
     }
 }
 
 @Composable
-private fun ModeOption(mode: SmartMode, selected: Boolean, onClick: () -> Unit) {
+private fun ModeOption(
+    mode: SmartMode,
+    selected: Boolean,
+    shape: androidx.compose.ui.graphics.Shape,
+    onClick: () -> Unit
+) {
     val container by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+        targetValue = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
         animationSpec = spring(stiffness = 400f),
         label = "mode_option_color"
     )
-    Surface(onClick = onClick, shape = RoundedCornerShape(12.dp),
+    ExpressiveCard(
+        onClick = onClick,
+        shape = shape,
         color = container,
-        modifier = Modifier.fillMaxWidth().pressScale(0.97f)) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(mode.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Text(mode.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
