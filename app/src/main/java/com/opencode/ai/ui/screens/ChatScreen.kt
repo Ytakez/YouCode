@@ -1,6 +1,6 @@
 package com.opencode.ai.ui.screens
 
-import androidx.compose.animation.core.animateColorAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -139,6 +139,7 @@ fun ChatScreen(
     onModelClick: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
+    var showFolderDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -462,7 +463,6 @@ fun ChatScreen(
 
         // Input: одна «таблетка» как в Claude: «+» слева, поле, круглая кнопка справа
         var showPlusMenu by remember { mutableStateOf(false) }
-        var showFolderDialog by remember { mutableStateOf(false) }
         val plusRotation by animateFloatAsState(
             targetValue = if (showPlusMenu) 45f else 0f,
             animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
