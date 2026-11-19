@@ -1,10 +1,6 @@
 package com.opencode.ai.ui.screens
 
-import com.opencode.ai.ui.components.Expressive
-import com.opencode.ai.ui.components.ExpressiveCard
-import com.opencode.ai.ui.components.ExpressivePill
-import com.opencode.ai.ui.components.groupShape
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateColorAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.getValue
@@ -120,7 +116,7 @@ fun ModelPickerScreen(
 
         LazyColumn(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(Expressive.Gap),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxSize()
         ) {
             if (viewModel.filteredModels.isEmpty()) {
@@ -155,7 +151,6 @@ fun ModelPickerScreen(
                     modifier = Modifier.animateItem(fadeInSpec = null).entrance(index = index, enabled = index < 10, fromY = 20.dp),
                     model = model,
                     isSelected = model.id == viewModel.currentModel.id && model.remoteProviderId == viewModel.currentModel.remoteProviderId,
-                    shape = groupShape(index, viewModel.filteredModels.size),
                     onClick = { onModelSelected(model) }
                 )
             }
@@ -165,56 +160,69 @@ fun ModelPickerScreen(
 }
 
 @Composable
-private fun ModelItem(
-    model: AiModel,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    shape: androidx.compose.ui.graphics.Shape,
-    modifier: Modifier = Modifier
-) {
+private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val container by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        targetValue = if (isSelected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer,
         animationSpec = spring(stiffness = 400f),
         label = "model_item_color"
     )
-    val onContainer = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-    ExpressiveCard(
+    Surface(
         onClick = onClick,
-        shape = shape,
+        shape = RoundedCornerShape(24.dp),
         color = container,
-        contentColor = onContainer,
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .pressScale(0.97f)
+            .then(
+                if (isSelected) Modifier.border(
+                    1.5.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                    RoundedCornerShape(24.dp)
+                ) else Modifier
+            )
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp, vertical = 15.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Live indicator
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
+            )
+            Spacer(Modifier.width(14.dp))
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = model.name,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = onContainer
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ExpressivePill(
-                        text = model.contextSize,
-                        container = if (isSelected) MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
-                        else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        content = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    ExpressivePill(
-                        text = if (model.isFree) "бесплатно" else model.provider,
-                        container = if (isSelected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.secondaryContainer,
-                        content = if (isSelected) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSecondaryContainer
-                    )
+                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                        Text(
+                            text = model.contextSize,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                        Text(
+                            text = if (model.isFree) "бесплатно" else model.provider,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
                 }
             }
 
@@ -222,7 +230,7 @@ private fun ModelItem(
                 imageVector = if (model.isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
                 contentDescription = "Избранное",
                 tint = if (model.isFavorite) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 modifier = Modifier.size(22.dp)
             )
         }

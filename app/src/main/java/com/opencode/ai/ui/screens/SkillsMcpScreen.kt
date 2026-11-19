@@ -32,13 +32,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencode.ai.data.SampleData
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
-import com.opencode.ai.ui.components.Expressive
-import com.opencode.ai.ui.components.ExpressiveCard
-import com.opencode.ai.ui.components.ExpressiveIconBadge
-import com.opencode.ai.ui.components.groupShape
 import com.opencode.ai.ui.theme.aurora
 import com.opencode.ai.ui.theme.entrance
 import com.opencode.ai.ui.theme.pressScale
@@ -88,13 +81,12 @@ fun SkillsMcpScreen(onBack: () -> Unit) {
 
             SampleData.skills.forEachIndexed { index, skill ->
                 InfoCard(
-                    icon = Icons.Outlined.Extension,
+                    icon = { Icon(Icons.Outlined.Extension, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                     title = skill.name,
                     subtitle = skill.description,
-                    shape = groupShape(index, SampleData.skills.size),
                     modifier = Modifier.entrance(2 + index)
                 )
-                if (index < SampleData.skills.lastIndex) Spacer(Modifier.height(Expressive.Gap))
+                Spacer(Modifier.height(10.dp))
             }
 
             Spacer(Modifier.height(24.dp))
@@ -116,11 +108,9 @@ fun SkillsMcpScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(14.dp))
 
             InfoCard(
-                icon = Icons.Outlined.Storage,
+                icon = { Icon(Icons.Outlined.Storage, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary) },
                 title = "MCP-серверов пока нет",
                 subtitle = null,
-                iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
-                iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
                 modifier = Modifier.entrance(6)
             )
 
@@ -131,36 +121,45 @@ fun SkillsMcpScreen(onBack: () -> Unit) {
 
 @Composable
 private fun InfoCard(
-    icon: ImageVector,
+    icon: @Composable () -> Unit,
     title: String,
     subtitle: String?,
-    modifier: Modifier = Modifier,
-    shape: Shape = RoundedCornerShape(Expressive.Card),
-    iconContainer: Color = MaterialTheme.colorScheme.secondaryContainer,
-    iconTint: Color = MaterialTheme.colorScheme.onSecondaryContainer
+    modifier: Modifier = Modifier
 ) {
-    ExpressiveCard(
-        shape = shape,
-        modifier = modifier.fillMaxWidth()
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = modifier.fillMaxWidth().pressScale(0.97f)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Start
         ) {
-            ExpressiveIconBadge(icon = icon, container = iconContainer, tint = iconTint)
-            Spacer(Modifier.width(16.dp))
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.size(44.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) { icon() }
+            }
+            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     title,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 if (subtitle != null) {
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         subtitle,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }

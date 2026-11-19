@@ -46,40 +46,20 @@ Deno.serve(async (req) => {
     const { data: taken } = await admin.from(TABLE).delete().eq("token", token).not("telegram_id", "is", null).select("token");
     if (!taken || taken.length === 0) return json({ status: "pending" });
 
-    // Если дальше что-то сломается, возвращаем запись: иначе приложение получит «ссылка устарела»,
-    // хотя пользователь уже подтвердил вход в боте.
-    const restore = () => admin.from(TABLE).insert(row);
-    const fail = async (step: string, err: unknown) => {
-      console.error("telegram-auth", step, err);
-      await restore();
-      return json({ error: step, detail: String((err as { message?: string })?.message ?? err ?? "").slice(0, 200) }, 500);
-    };
-
     const email = `tg${row.telegram_id}@users.youcode.app`;
     const username = row.telegram_username || `tg${row.telegram_id}`;
     // Для вернувшегося пользователя createUser вернёт «already registered» — это нормально.
-    const { error: createError } = await admin.auth.admin.createUser({
+    await admin.auth.admin.createUser({
       email,
       email_confirm: true,
       user_metadata: { username, telegram_id: row.telegram_id, first_name: row.first_name },
     });
-    if (createError && !/already|registered|exists/i.test(createError.message)) return await fail("create", createError);
-
     const { data: link, error: linkError } = await admin.auth.admin.generateLink({ type: "magiclink", email });
     const hashed = link?.properties?.hashed_token;
-    if (linkError || !hashed) return await fail("link", linkError ?? "no hashed_token");
-
-    // verifyOtp превращает клиент в «залогиненного пользователя»: все его следующие запросы к базе
-    // пойдут уже с правами этого пользователя, а не service role (и упрутся в RLS).
-    // Поэтому для него отдельный одноразовый клиент, а `admin` остаётся чистым.
-    const verifier = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-      { auth: { persistSession: false, autoRefreshToken: false } },
-    );
-    const { data: verified, error: verifyError } = await verifier.auth.verifyOtp({ token_hash: hashed, type: "magiclink" });
+    if (linkError || !hashed) return json({ error: "link" }, 500);
+    const { data: verified, error: verifyError } = await admin.auth.verifyOtp({ token_hash: hashed, type: "magiclink" });
     const session = verified?.session;
-    if (verifyError || !session) return await fail("session", verifyError ?? "no session");
+    if (verifyError || !session) return json({ error: "session" }, 500);
 
     return json({
       status: "ok",

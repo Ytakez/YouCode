@@ -31,19 +31,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.ui.graphics.Color
-import com.opencode.ai.ui.components.Expressive
-import com.opencode.ai.ui.components.ExpressiveCard
-import com.opencode.ai.ui.components.ExpressiveIconBadge
-import com.opencode.ai.ui.components.ExpressivePill
-import com.opencode.ai.ui.components.groupShape
-import androidx.compose.ui.graphics.Shape
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -175,10 +167,9 @@ fun ProvidersScreen(
                     item = item,
                     connected = !savedKeys[item.id].isNullOrBlank(),
                     onClick = { dialogItem = item },
-                    shape = groupShape(index, featured.size),
                     modifier = Modifier.entrance(index)
                 )
-                if (index < featured.lastIndex) Spacer(Modifier.height(Expressive.Gap))
+                Spacer(Modifier.height(10.dp))
             }
 
             if (liveProviders.isNotEmpty()) {
@@ -190,9 +181,8 @@ fun ProvidersScreen(
                     modifier = Modifier.padding(vertical = 6.dp))
                 liveProviders.forEachIndexed { index, item ->
                     ProviderCard(item, !savedKeys[item.id].isNullOrBlank(), onClick = { dialogItem = item },
-                        shape = groupShape(index, liveProviders.size),
                         modifier = Modifier.entrance(index))
-                    if (index < liveProviders.lastIndex) Spacer(Modifier.height(Expressive.Gap))
+                    Spacer(Modifier.height(8.dp))
                 }
             }
             viewModel?.openCodeCatalogError?.let { error ->
@@ -210,48 +200,38 @@ fun ProvidersScreen(
             )
             Spacer(Modifier.height(10.dp))
 
-            TextField(
+            OutlinedTextField(
                 value = search,
                 onValueChange = { search = it },
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("Поиск") },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                shape = RoundedCornerShape(Expressive.Card),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent
+                shape = RoundedCornerShape(32.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                 ),
                 singleLine = true
             )
 
             Spacer(Modifier.height(14.dp))
 
-            keyProviders.forEachIndexed { index, item ->
+            keyProviders.forEach { item ->
                 val connected = !savedKeys[item.id].isNullOrBlank()
-                ExpressiveCard(
-                    onClick = { dialogItem = item },
-                    shape = groupShape(index, keyProviders.size, outer = Expressive.CardSmall),
-                    modifier = Modifier.fillMaxWidth()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { dialogItem = item }
+                        .padding(vertical = 12.dp)
                 ) {
-                    Row(
-                        Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(item.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-                            Text(
-                                if (connected) "подключён" else "ключ",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (connected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                    Text(item.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (connected) "подключён" else "ключ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (connected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-                if (index < keyProviders.lastIndex) Spacer(Modifier.height(Expressive.Gap))
             }
 
             catalogMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall,
@@ -441,42 +421,39 @@ private fun KeyDialog(
 }
 
 @Composable
-private fun ProviderCard(
-    item: ProviderItem,
-    connected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    shape: Shape = RoundedCornerShape(Expressive.Card)
-) {
-    ExpressiveCard(
+private fun ProviderCard(item: ProviderItem, connected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
         onClick = onClick,
-        shape = shape,
-        modifier = modifier.fillMaxWidth()
+        shape = RoundedCornerShape(26.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = modifier.fillMaxWidth().pressScale(0.97f)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.Top
         ) {
-            ExpressiveIconBadge(
-                icon = Icons.Outlined.Code,
-                container = if (connected) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.secondaryContainer,
-                tint = if (connected) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.onSecondaryContainer
-            )
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.weight(1f)) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.Code,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(10.dp).size(20.dp)
+                )
+            }
+            Spacer(Modifier.width(14.dp))
+            Column {
                 Text(item.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(2.dp))
-                Text(item.description, style = MaterialTheme.typography.bodyMedium,
+                Spacer(Modifier.height(4.dp))
+                Text(item.description, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (connected) {
-                    Spacer(Modifier.height(10.dp))
-                    ExpressivePill(
-                        "подключён",
-                        container = MaterialTheme.colorScheme.primaryContainer,
-                        content = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text("подключён", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary)
                 }
             }
         }

@@ -13,8 +13,6 @@ import com.opencode.ai.data.AiModel
 import com.opencode.ai.data.AttachedFile
 import com.opencode.ai.data.ChatMessage
 import com.opencode.ai.data.ChatSession
-import com.opencode.ai.data.MsgPart
-import com.opencode.ai.data.OcAsk
 import com.opencode.ai.data.SampleData
 import com.opencode.ai.engine.Engine
 import com.opencode.ai.engine.EngineService
@@ -91,12 +89,45 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * Ничего не общее между людьми, и никакого центрального сервера нет.
      */
     private fun startEmbeddedEngine() {
-        if (!engine.available) { engineState = "missing"; return }
+        if (!engine.available) {
+            engineState = "missing"
+            engineError = "Нет libopencode.so в APK. Собери через GitHub Actions (шаг Build opencode engine) или локально: sh engine/build-engine.sh"
+            return
+        }
         val saved = providerPrefs.getString("base_opencode-server", "").orEmpty()
         // Если пользователь подключил свой внешний сервер, его не трогаем.
         if (saved.isNotBlank() && !saved.contains("127.0.0.1")) { engineState = "external"; return }
+        // Как в Margy: конфиг и инструкции перед стартом процесса
+        engine.extraEnv = {
+            mapOf("OPENCODE_CONFIG_CONTENT" to openCodeBuiltInConfig())
+        }
+        engine.beforeStart = {
+            writeOpenCodePrompt()
+        }
         engineManaged = true
         viewModelScope.launch { runEngine() }
+    }
+
+    /** Минимальный конфиг OpenCode (как builtIn() в Margy). */
+    private fun openCodeBuiltInConfig(): String {
+        val prompt = File(engine.home, ".config/youcode/youcode.md")
+        return JSONObject()
+            .put("instructions", JSONArray().put(prompt.absolutePath))
+            .toString()
+    }
+
+    /** Системный промпт для агента: Android + рабочая папка. */
+    private fun writeOpenCodePrompt() {
+        val prompt = File(engine.home, ".config/youcode/youcode.md")
+        prompt.parentFile?.mkdirs()
+        prompt.writeText(
+            """
+            |You are YouCode on Android. Use tools (read/write/edit/shell) when helpful.
+            |Prefer the session working directory for all file operations.
+            |Keep answers concise unless the user asks for detail.
+            |When creating or editing files, confirm the path briefly.
+            """.trimMargin()
+        )
     }
 
     /** Запускает движок, если он не работает (первый старт и перезапуск после того, как система его убила). */
@@ -339,19 +370,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var generationStatus by mutableStateOf("Подготавливаю запрос")
         private set
 
-    /** Реальные события инструментов OpenCode (не скрытые рассуждения модели). */
+    /** Реальные события инструментов OpenCode (как в Margy). */
     val generationActivities = mutableStateListOf<String>()
 
-    private class DeltaPiece(val message: String, val reasoning: Boolean, val ordinal: Int, val text: String)
+    /**
+     * Живой текст рассуждений модели (session.reasoning.delta), как блок «Думает…» в Margy.
+     * Можно раскрыть и читать, пока модель думает.
+     */
+    var liveReasoning by mutableStateOf("")
+        private set
 
-    /** Что хранит opencode о текущем ходе (инструменты, готовые части) — обновляется опросом. */
-    private var liveTurn by mutableStateOf<List<AssistantMsg>>(emptyList())
-
-    /** Что модель печатает и о чём думает прямо сейчас — приходит потоком событий. */
-    private var deltaPieces by mutableStateOf<List<DeltaPiece>>(emptyList())
-
-    /** Инструменты, ждущие разрешения пользователя. */
-    var asks by mutableStateOf<List<OcAsk>>(emptyList())
+    /** Идёт ли сейчас стрим reasoning (для подписи «Думает…»). */
+    var isReasoningLive by mutableStateOf(false)
         private set
 
     var searchQuery by mutableStateOf("")
@@ -362,7 +392,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var currentSessionId: String? = null
 
-    init { loadSessions() }
+    init {
+        loadSessions()
+        // Восстановить чип рабочей папки после перезапуска
+        if (preferredFolder.isNotBlank()) {
+            val label = folderLabel()
+            val files = runCatching {
+                agentFolder().listFiles()?.mapNotNull { it.name }?.filter { !it.startsWith(".") }?.take(30) ?: emptyList()
+            }.getOrDefault(emptyList())
+            workingFolderName = label
+            workingFolderFiles.clear()
+            workingFolderFiles.addAll(files)
+        }
+    }
 
     // Pending attachments before send
     var pendingAttachments = mutableStateListOf<AttachedFile>()
@@ -374,6 +416,138 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var workingFolderFiles = mutableStateListOf<String>()
         private set
+
+    // ---- Рабочая папка агента (как в Margy: реальный путь для opencode) ----
+    private val folderPrefs = application.getSharedPreferences("folder", android.content.Context.MODE_PRIVATE)
+    /** Путь, выбранный пользователем. Пустая строка = папка приложения. */
+    var preferredFolder by mutableStateOf(folderPrefs.getString("path", "").orEmpty())
+        private set
+    /** Есть ли доступ «ко всем файлам» (Android 11+). */
+    var filesGranted by mutableStateOf(hasAllFilesAccess())
+        private set
+
+    val phoneRoot: File get() = android.os.Environment.getExternalStorageDirectory()
+
+    fun checkFilesAccess() {
+        filesGranted = hasAllFilesAccess()
+    }
+
+    private fun hasAllFilesAccess(): Boolean =
+        android.os.Build.VERSION.SDK_INT < 30 || android.os.Environment.isExternalStorageManager()
+
+    /**
+     * Реальная папка, в которой opencode читает/пишет файлы и запускает команды.
+     * Если выбранный путь недоступен — fallback на workspace приложения.
+     */
+    fun agentFolder(): File {
+        val path = preferredFolder
+        if (path.isBlank()) return engine.workspace
+        val f = File(path)
+        return if (filesGranted && (f.isDirectory || f.mkdirs())) f else engine.workspace
+    }
+
+    fun folderLabel(path: String? = preferredFolder.ifBlank { null }): String {
+        val p = path ?: return "Папка приложения"
+        if (p.isBlank() || p == engine.workspace.absolutePath) return "Папка приложения"
+        if (p == phoneRoot.absolutePath) return "Память телефона"
+        if (p.startsWith(phoneRoot.absolutePath + "/")) return p.removePrefix(phoneRoot.absolutePath + "/")
+        return p
+    }
+
+    fun setPreferredFolder(path: String) {
+        preferredFolder = path
+        folderPrefs.edit().putString("path", path).apply()
+        // Обновляем UI-чип
+        val label = folderLabel(path.ifBlank { null })
+        val files = runCatching {
+            agentFolder().listFiles()?.mapNotNull { it.name }?.filter { !it.startsWith(".") }?.take(30) ?: emptyList()
+        }.getOrDefault(emptyList())
+        workingFolderName = label
+        workingFolderFiles.clear()
+        workingFolderFiles.addAll(files)
+        workingFolderUri = null
+    }
+
+    fun clearPreferredFolder() {
+        setPreferredFolder("")
+        clearWorkingFolder()
+    }
+
+    /** Инструкция для агента: откуда читать/куда писать файлы (как в Margy). */
+    private fun agentWorkspaceInstructions(dir: File): String {
+        val path = dir.absolutePath
+        val listing = runCatching {
+            dir.listFiles()
+                ?.filter { it.isFile && !it.name.startsWith(".") }
+                ?.sortedBy { it.name.lowercase() }
+                ?.take(40)
+                ?.joinToString("\n") { f ->
+                    val size = when {
+                        f.length() < 1024 -> "${f.length()} B"
+                        f.length() < 1024 * 1024 -> "${f.length() / 1024} KB"
+                        else -> "%.1f MB".format(f.length() / (1024.0 * 1024.0))
+                    }
+                    "- ${f.name} ($size)"
+                }
+                .orEmpty()
+        }.getOrDefault("")
+        val subdirs = runCatching {
+            dir.listFiles()
+                ?.filter { it.isDirectory && !it.name.startsWith(".") }
+                ?.sortedBy { it.name.lowercase() }
+                ?.take(20)
+                ?.joinToString(", ") { it.name }
+                .orEmpty()
+        }.getOrDefault("")
+
+        return buildString {
+            appendLine("Рабочая папка агента (все операции с файлами — только здесь):")
+            appendLine(path)
+            appendLine()
+            appendLine("Правила:")
+            appendLine("- Читай, создавай, изменяй и сохраняй файлы в этой папке через инструменты (read/write/edit/shell).")
+            appendLine("- Пути указывай относительно этой папки или абсолютные, начинающиеся с «$path».")
+            appendLine("- Не выходи за пределы этой папки без явной просьбы пользователя.")
+            appendLine("- После создания или изменения файла кратко сообщи имя и путь.")
+            if (listing.isNotBlank()) {
+                appendLine()
+                appendLine("Файлы в папке сейчас:")
+                appendLine(listing)
+            } else {
+                appendLine()
+                appendLine("Папка пока пуста — можно создавать новые файлы.")
+            }
+            if (subdirs.isNotBlank()) {
+                appendLine()
+                appendLine("Подпапки: $subdirs")
+            }
+        }.trim()
+    }
+
+    /** Обновить чип и список файлов из реальной папки агента. */
+    fun refreshAgentFolderListing() {
+        val dir = agentFolder()
+        val label = folderLabel(if (preferredFolder.isBlank()) null else preferredFolder)
+        val files = runCatching {
+            dir.listFiles()
+                ?.mapNotNull { it.name }
+                ?.filter { !it.startsWith(".") }
+                ?.sorted()
+                ?.take(40)
+                ?: emptyList()
+        }.getOrDefault(emptyList())
+        // Состояние Compose лучше трогать с главного потока
+        val apply = {
+            workingFolderName = label
+            workingFolderFiles.clear()
+            workingFolderFiles.addAll(files)
+            workingFolderUri = null
+        }
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) apply()
+        else {
+            android.os.Handler(android.os.Looper.getMainLooper()).post { apply() }
+        }
+    }
 
     val filteredModels: List<AiModel>
         get() {
@@ -422,6 +596,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearWorkingFolder() {
+        preferredFolder = ""
+        folderPrefs.edit().putString("path", "").apply()
         workingFolderUri = null
         workingFolderName = null
         workingFolderFiles.clear()
@@ -458,7 +634,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         isGenerating = true
         generationActivities.clear()
-        clearLive()
+        liveReasoning = ""
+        isReasoningLive = false
         generationStatus = "Подключаюсь к модели"
         EngineService.start(getApplication<Application>())
         val job = viewModelScope.launch {
@@ -471,7 +648,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val requestModel = remoteModel
             val protocol = providerPrefs.getString("protocol_${providerId}", "openai").orEmpty()
             generationStatus = if (providerId == "opencode-server") "Подключаюсь к OpenCode" else "Отправляю запрос провайдеру"
-            var replyTurn: OcTurn? = null
             val reply = if (providerId == "opencode-server" && endpoint.isNotBlank()) {
                 runCatching {
                     withContext(Dispatchers.IO) {
@@ -481,34 +657,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val history = messages.dropLast(1).takeLast(8).joinToString("\n") {
                             (if (it.isUser) "Пользователь: " else "Ассистент: ") + it.content
                         }
-                        val existingOcSession = sessions.firstOrNull { it.id == sessionId }?.ocSessionId
-                        val result = callOpenCodeServer(
-                            endpoint, apiKey, currentModel.id, existingOcSession,
-                            buildPrompt = { isNewSession ->
-                                buildString {
-                                    // В живой сессии контекст уже у opencode: повторяем инструкции и историю только в новой.
-                                    if (isNewSession) {
-                                        append("Системные инструкции: ").append(currentMode.systemHint)
-                                        if (history.isNotBlank()) append("\nИстория диалога:\n").append(history)
-                                        append("\nПользователь: ")
-                                    }
-                                    append(text.trim())
-                                    attachmentsCopy.forEach { f -> append("\n\n[Файл: ").append(f.name).append("]\n").append(f.contentPreview.take(12000)) }
-                                }
-                            },
-                            selectedProviderId = currentModel.remoteProviderId,
-                            directory = if (engineManaged) engine.workspacePath else null,
-                            onSession = { id ->
-                                viewModelScope.launch(Dispatchers.Main) {
-                                    val i = sessions.indexOfFirst { it.id == sessionId }
-                                    if (i >= 0 && sessions[i].ocSessionId != id) sessions[i] = sessions[i].copy(ocSessionId = id)
-                                    persistSessions()
-                                }
-                            },
-                            onStage = { stage -> viewModelScope.launch(Dispatchers.Main) { generationStatus = stage } }
-                        )
-                        replyTurn = result.turn
-                        result.text
+                        val workDir = agentFolder()
+                        // Обновить список файлов перед запросом — модель видит актуальное содержимое
+                        refreshAgentFolderListing()
+                        val fullPrompt = buildString {
+                            append("Системные инструкции: ").append(currentMode.systemHint)
+                            append("\n\n")
+                            append(agentWorkspaceInstructions(workDir))
+                            if (history.isNotBlank()) append("\nИстория диалога:\n").append(history)
+                            append("\nПользователь: ").append(text.trim())
+                            attachmentsCopy.forEach { f ->
+                                append("\n\n[Файл: ").append(f.name).append("]\n")
+                                append(f.contentPreview.take(12000))
+                            }
+                        }
+                        val answer = callOpenCodeServer(
+                            endpoint, apiKey, currentModel.id, fullPrompt, currentModel.remoteProviderId
+                        ) { stage ->
+                            viewModelScope.launch(Dispatchers.Main) { generationStatus = stage }
+                        }
+                        // После ответа агент мог создать/изменить файлы — обновим список в UI
+                        refreshAgentFolderListing()
+                        answer
                     }
                 }.fold(
                     onSuccess = { it to emptyList<AttachedFile>() },
@@ -550,13 +720,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Здесь страховка от отмены в неудачный момент: не показываем оборванный ответ.
             if (!isActive) throw CancellationException("Генерация остановлена")
             generationStatus = "Получен ответ · оформляю результат"
-            val turn = replyTurn
-            clearLive()
             deliverReply(sessionId, ChatMessage(
                 id = UUID.randomUUID().toString(), content = reply.first, isUser = false,
-                modelName = shownModel, attachments = reply.second,
-                parts = turn?.parts.orEmpty(), error = turn?.error,
-                tokensIn = turn?.tokensIn ?: 0, tokensOut = turn?.tokensOut ?: 0
+                modelName = shownModel, attachments = reply.second
             ))
         }
         generationJob = job
@@ -567,6 +733,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Выполняется при любом исходе (успех, ошибка, отмена). «Остановлено» не перетираем.
             if (isGenerating) generationStatus = "Готово"
             isGenerating = false
+            isReasoningLive = false
             EngineService.stop(getApplication<Application>())
         }
     }
@@ -579,9 +746,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val wasRunning = generationJob?.isActive == true
         val job = generationJob
         val sessionId = currentSessionId
-        // То, что модель успела сделать, остаётся в чате.
-        val partial = liveShown()
         isGenerating = false
+        isReasoningLive = false
         generationStatus = "Остановлено"
         generationJob = null
         val connection = activeConnection
@@ -589,17 +755,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val abort = activeAbort
         job?.cancel()
         if (wasRunning && sessionId != null) {
-            val said = partial.filterIsInstance<MsgPart.Text>().joinToString("\n\n") { it.text.trim() }.trim()
             deliverReply(sessionId, ChatMessage(
                 id = UUID.randomUUID().toString(),
-                content = said.ifBlank { if (partial.isEmpty()) "Генерация остановлена." else "" },
+                content = "Генерация остановлена.",
                 isUser = false,
-                modelName = currentModel.name,
-                parts = partial,
-                error = if (partial.isNotEmpty()) "Генерация остановлена." else null
+                modelName = currentModel.name
             ))
         }
-        clearLive()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { abort?.invoke() }
             runCatching { connection?.disconnect() }
@@ -644,33 +806,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun messageToJson(m: ChatMessage): JSONObject = JSONObject()
         .put("id", m.id).put("content", m.content).put("isUser", m.isUser).put("ts", m.timestamp)
         .put("model", m.modelName ?: JSONObject.NULL)
-        .put("error", m.error ?: JSONObject.NULL)
-        .put("tin", m.tokensIn).put("tout", m.tokensOut)
-        .put("parts", JSONArray().also { arr -> m.parts.forEach { arr.put(partToJson(it)) } })
         .put("attachments", JSONArray().also { arr ->
             m.attachments.forEach { a ->
                 arr.put(JSONObject().put("id", a.id).put("name", a.name).put("uri", a.uri?.toString() ?: "")
                     .put("mime", a.mimeType).put("size", a.sizeBytes).put("preview", a.contentPreview).put("saved", a.isSavedByAi))
             }
         })
-
-    private fun partToJson(p: MsgPart): JSONObject = when (p) {
-        is MsgPart.Text -> JSONObject().put("t", "text").put("text", p.text)
-        is MsgPart.Reasoning -> JSONObject().put("t", "reasoning").put("text", p.text).put("ms", p.ms)
-        is MsgPart.Tool -> JSONObject().put("t", "tool").put("name", p.name).put("status", p.status)
-            .put("arg", p.arg ?: JSONObject.NULL).put("input", p.input).put("output", p.output.take(6000))
-            .put("error", p.error ?: JSONObject.NULL)
-    }
-
-    private fun partFromJson(o: JSONObject): MsgPart? = when (o.optString("t")) {
-        "text" -> MsgPart.Text(o.optString("text"))
-        "reasoning" -> MsgPart.Reasoning(o.optString("text"), o.optLong("ms"))
-        "tool" -> MsgPart.Tool(
-            o.optString("name"), o.optString("status", "completed"), o.str("arg"),
-            o.optString("input"), o.optString("output"), o.str("error")
-        )
-        else -> null
-    }
 
     private fun messageFromJson(o: JSONObject): ChatMessage {
         val atts = o.optJSONArray("attachments") ?: JSONArray()
@@ -680,10 +821,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isUser = o.optBoolean("isUser"),
             timestamp = o.optLong("ts", System.currentTimeMillis()),
             modelName = if (o.isNull("model")) null else o.optString("model"),
-            parts = o.optJSONArray("parts").objects().mapNotNull { partFromJson(it) },
-            error = o.str("error"),
-            tokensIn = o.optLong("tin"),
-            tokensOut = o.optLong("tout"),
             attachments = (0 until atts.length()).mapNotNull { i ->
                 atts.optJSONObject(i)?.let { a ->
                     AttachedFile(
@@ -708,7 +845,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching {
                     val arr = JSONArray()
                     snapshot.forEach { s ->
-                        arr.put(JSONObject().put("id", s.id).put("title", s.title).put("last", s.lastMessage).put("ts", s.timestamp).put("oc", s.ocSessionId ?: JSONObject.NULL)
+                        arr.put(JSONObject().put("id", s.id).put("title", s.title).put("last", s.lastMessage).put("ts", s.timestamp)
                             .put("messages", JSONArray().also { ma -> s.messages.forEach { ma.put(messageToJson(it)) } }))
                     }
                     val tmp = File(sessionsFile.path + ".tmp")
@@ -733,7 +870,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 title = o.optString("title"),
                                 lastMessage = o.optString("last"),
                                 timestamp = o.optLong("ts"),
-                                ocSessionId = o.str("oc"),
                                 messages = (0 until ms.length()).mapNotNull { j -> ms.optJSONObject(j)?.let { messageFromJson(it) } }
                             )
                         }
@@ -748,14 +884,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newChat() {
-        if (!isGenerating) clearLive()
         messages.clear()
         pendingAttachments.clear()
         currentSessionId = null
     }
 
     fun loadSession(session: ChatSession) {
-        if (!isGenerating) clearLive()
         messages.clear()
         pendingAttachments.clear()
         currentSessionId = session.id
@@ -773,88 +907,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
 
-    /** Результат хода: сессия opencode (чат продолжается в ней) и всё, что модель сделала. */
-    private class OcResult(val sessionId: String, val turn: OcTurn?, val text: String)
-
-    @Volatile private var ocRoot: String = ""
-    @Volatile private var ocPassword: String = ""
-    @Volatile private var activeOcSession: String? = null
-
-    /** Простой запрос к OpenCode без привязки к текущей генерации (разрешения, ответы на них). */
-    private fun ocCall(method: String, path: String, body: JSONObject? = null): JSONObject {
-        val connection = (URL("$ocRoot/$path").openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 10000
-            readTimeout = 20000
-            setRequestProperty("Accept", "application/json")
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
-            if (ocPassword.isNotBlank()) {
-                val encoded = Base64.encodeToString("opencode:$ocPassword".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                setRequestProperty("Authorization", "Basic $encoded")
-            }
-        }
-        try {
-            if (body != null) connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val status = connection.responseCode
-            val raw = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            require(status in 200..299) { "HTTP $status: ${raw.take(300)}" }
-            return if (raw.isBlank()) JSONObject() else JSONObject(raw)
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    /** Запросы разрешений для текущей сессии: показываем диалог, как в OpenCode. */
-    private fun refreshAsks() {
-        val session = activeOcSession ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            val list = runCatching {
-                ocCall("GET", "api/permission/request").optJSONArray("data").objects().map { parseAsk(it) }
-            }.getOrNull() ?: return@launch
-            val mine = list.filter { it.session == session }
-            withContext(Dispatchers.Main) { asks = mine }
-        }
-    }
-
-    /** decision: "once", "always" или "reject". */
-    fun replyAsk(ask: OcAsk, decision: String) {
-        asks = asks.filter { it.id != ask.id }
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                ocCall(
-                    "POST", "api/session/${enc(ask.session)}/permission/${enc(ask.id)}/reply",
-                    JSONObject().put("decision", decision)
-                )
-            }
-            refreshAsks()
-        }
-    }
-
     /**
-     * Ход в сессии opencode встроенного (или своего) сервера. Как у Margy: сессия живёт между сообщениями,
-     * модель видит инструменты, а мы читаем из неё рассуждения, вызовы инструментов и текст.
+     * Routes free OpenCode models through the user's own official OpenCode Server.
+     * Direct calls to OpenCode's free-tier inference endpoints from third-party apps
+     * are rejected by OpenCode; the official server is the supported bridge.
      */
-    private suspend fun callOpenCodeServer(
-        baseUrl: String,
-        password: String,
-        modelId: String,
-        existingSessionId: String?,
-        buildPrompt: (isNewSession: Boolean) -> String,
-        selectedProviderId: String? = null,
-        directory: String? = null,
-        onSession: (String) -> Unit = {},
-        onStage: (String) -> Unit = {}
-    ): OcResult {
+    private suspend fun callOpenCodeServer(baseUrl: String, password: String, modelId: String, prompt: String, selectedProviderId: String? = null, onStage: (String) -> Unit = {}): String {
         val root = baseUrl.trim().trimEnd('/')
         require(root.startsWith("https://") || root.startsWith("http://")) {
             "Адрес сервера должен начинаться с http:// или https://"
         }
-        ocRoot = root
-        ocPassword = password
 
         fun request(path: String, body: JSONObject? = null, method: String? = null, readTimeoutMs: Int = 180000): JSONObject {
             val connection = (URL("$root/$path").openConnection() as HttpURLConnection).apply {
@@ -912,64 +974,60 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             "Модель $modelId не найдена в каталоге OpenCode. Обнови список моделей и выбери доступную модель."
         }
 
-        // Чат продолжается в той же сессии; если её нет (чистая установка, другой сервер) — создаём новую.
-        var sessionId = existingSessionId?.takeIf { it.isNotBlank() }
-        if (sessionId != null) {
-            onStage("Продолжаю сессию")
-            val alive = runCatching { request("api/session/${enc(sessionId!!)}", readTimeoutMs = 15000) }.isSuccess
-            if (!alive) sessionId = null
-        }
-        val created = sessionId == null
-        if (sessionId == null) {
-            onStage("Создаю сессию")
-            // Как у Margy: агент build (с инструментами) и папка проекта. Для чужого сервера не трогаем.
-            val sessionBody = JSONObject().put("title", "YouCode Android")
-            if (!directory.isNullOrBlank()) {
-                sessionBody.put("agent", "build")
-                sessionBody.put("location", JSONObject().put("directory", directory))
-            }
-            val session = request("api/session", sessionBody)
-            sessionId = session.optString("id").ifBlank {
-                session.optJSONObject("data")?.optString("id").orEmpty()
-            }
-            require(sessionId.isNotBlank()) { "OpenCode создал сессию без ID: ${session.toString().take(400)}" }
-        }
-        val sid: String = sessionId ?: error("OpenCode не вернул сессию")
-        activeOcSession = sid
-        onSession(sid)
+        // Как в Margy: модель, agent и directory задаём сразу при создании сессии.
+        onStage("Создаю сессию")
+        val workDir = agentFolder()
+        runCatching { workDir.mkdirs() }
+        val dir = workDir.absolutePath
+        val modelRef = JSONObject().put("providerID", providerId).put("id", modelId)
+        val sessionBody = JSONObject()
+            .put("title", "YouCode Android")
+            .put("model", modelRef)
+            .put("agent", "build")
+            .put("location", JSONObject().put("directory", dir))
+        val session = request("api/session", sessionBody)
+        // Margy: data.id; некоторые версии отдают id на верхнем уровне
+        val sessionId = session.optJSONObject("data")?.optString("id").orEmpty()
+            .ifBlank { session.optString("id") }
+        require(sessionId.isNotBlank()) { "OpenCode создал сессию без ID: ${session.toString().take(400)}" }
 
-        // Модель задаётся на уровне сессии: в теле prompt её нет.
+        // На всякий случай ещё раз выставим модель (старые/новые API ведут себя по-разному).
         val modelFailure = runCatching {
             request(
-                "api/session/${enc(sid)}/model",
-                JSONObject().put("model", JSONObject().put("providerID", providerId).put("id", modelId)),
+                "api/session/${enc(sessionId)}/model",
+                JSONObject().put("model", modelRef),
                 readTimeoutMs = 20000
             )
         }.exceptionOrNull()
         if (modelFailure != null) {
             val message = modelFailure.message.orEmpty()
-            // Совсем старые движки не знают переключения модели, но принимают model в теле /message.
             if (!message.startsWith("HTTP 404") && !message.startsWith("HTTP 405")) throw modelFailure
         }
+        runCatching {
+            request(
+                "api/session/${enc(sessionId)}/agent",
+                JSONObject().put("agent", "build"),
+                readTimeoutMs = 10000
+            )
+        }
 
+        // Subscribe to OpenCode's real event stream before sending the prompt.
+        // This surfaces actual tool calls (shell/read/edit/etc.), not fabricated "thinking" text.
         val abortAction: () -> Unit = {
-            runCatching { request("api/session/${enc(sid)}/interrupt", JSONObject(), readTimeoutMs = 10000) }
+            runCatching { request("api/session/${enc(sessionId)}/interrupt", JSONObject(), readTimeoutMs = 10000) }
         }
         activeAbort = abortAction
         val eventConnection = AtomicReference<HttpURLConnection?>(null)
-        val executionEnded = java.util.concurrent.atomic.AtomicBoolean(false)
-        val eventJob = listenOpenCodeEvents(root, password, sid, eventConnection, executionEnded)
+        val eventJob = listenOpenCodeEvents(root, password, sessionId, eventConnection)
         try {
-            // Запоминаем последнее сообщение пользователя ДО запроса: так отличаем новый ход от прошлого.
-            val previousUser = runCatching {
-                lastUserId(request("api/session/${enc(sid)}/message?limit=200", readTimeoutMs = 30000))
-            }.getOrNull()
-
             onStage("Отправляю запрос модели")
-            val fullPrompt = buildPrompt(created)
             var directAnswer: String? = null
             val promptFailure = runCatching {
-                request("api/session/${enc(sid)}/prompt", JSONObject().put("text", fullPrompt), readTimeoutMs = 120000)
+                request(
+                    "api/session/${enc(sessionId)}/prompt",
+                    JSONObject().put("text", prompt),
+                    readTimeoutMs = 120000
+                )
             }.exceptionOrNull()
             if (promptFailure != null) {
                 val failure = promptFailure.message.orEmpty()
@@ -977,216 +1035,348 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // и отвечают готовым сообщением ассистента.
                 if (failure.startsWith("HTTP 404") || failure.startsWith("HTTP 405")) {
                     val legacy = request(
-                        "api/session/${enc(sid)}/message",
+                        "api/session/${enc(sessionId)}/message",
                         JSONObject()
                             .put("model", JSONObject().put("providerID", providerId).put("id", modelId))
-                            .put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", fullPrompt))),
+                            .put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", prompt))),
                         readTimeoutMs = 30 * 60 * 1000
                     )
-                    directAnswer = legacyText(legacy)
+                    directAnswer = extractAssistantText(legacy)
                 } else {
                     throw promptFailure
                 }
             }
-            if (directAnswer != null) {
-                require(directAnswer.isNotBlank()) { "OpenCode не вернул текст ответа. Проверь, что выбранная модель доступна в каталоге." }
-                return OcResult(sid, null, directAnswer)
-            }
 
-            onStage("Модель обрабатывает запрос")
-            // Агентные задачи могут идти долго: ждём до 30 минут, опрашивая историю сессии.
-            val deadline = System.currentTimeMillis() + 30 * 60 * 1000L
-            var turn: OcTurn? = null
-            var emptyPolls = 0
-            var stable = 0
-            var lastSignature = ""
-            var tick = 0
-            while (System.currentTimeMillis() < deadline) {
-                // Флаг читаем ДО запроса: тогда в списке гарантированно лежит финальное состояние.
-                val endedBefore = executionEnded.get()
-                val t = parseTurn(request("api/session/${enc(sid)}/message?limit=200", readTimeoutMs = 30000), previousUser)
-                turn = t
-                viewModelScope.launch(Dispatchers.Main) { liveTurn = t.messages }
-                if (tick++ % 4 == 0) refreshAsks()
-
-                // Ошибка модели окончательна (повторы OpenCode сюда не попадают), OpenCode сам объявляет конец хода.
-                if (t.error != null || endedBefore || (t.started && t.idle)) break
-
-                if (!t.started || t.messages.isEmpty()) {
-                    if (++emptyPolls >= 170) {
-                        throw IllegalStateException(
-                            "Модель не начала отвечать за 2 минуты. Проверь выбранную модель и подключение провайдера в OpenCode."
-                        )
-                    }
-                } else {
-                    emptyPolls = 0
-                }
-                if (t.signature != lastSignature) {
-                    lastSignature = t.signature
-                    stable = 0
-                    onStage(
-                        when {
-                            t.toolRunning -> "Выполняю инструменты"
-                            t.hasText -> "Модель печатает ответ"
-                            else -> "Модель думает"
-                        }
+            val answer = directAnswer ?: run {
+                onStage("Модель обрабатывает запрос")
+                // Агентные задачи могут идти долго: ждём до 30 минут, опрашивая историю сессии.
+                val deadline = System.currentTimeMillis() + 30 * 60 * 1000L
+                var collected = ""
+                var unchanged = 0
+                var emptyPolls = 0
+                while (System.currentTimeMillis() < deadline) {
+                    val listing = request(
+                        "api/session/${enc(sessionId)}/message?limit=100",
+                        readTimeoutMs = 30000
                     )
-                } else {
-                    stable++
+                    val text = extractAssistantText(listing)
+                    assistantError(listing)?.let {
+                        throw IllegalStateException("Модель вернула ошибку: $it")
+                    }
+                    if (text.isNotBlank()) {
+                        emptyPolls = 0
+                        if (text != collected) {
+                            collected = text
+                            unchanged = 0
+                            onStage("Модель печатает ответ")
+                        } else {
+                            unchanged++
+                        }
+                        // time.completed приходит не во всех версиях: тогда считаем ответ
+                        // готовым, когда текст перестал меняться примерно на 18 секунд.
+                        if (assistantMessagesCompleted(listing) ||
+                            (unchanged >= 12 && !assistantMessagesExposeCompletion(listing))
+                        ) break
+                    } else {
+                        // Сообщений ассистента ещё нет: модель могла не запуститься вовсе.
+                        if (sessionHasAssistantMessage(listing)) {
+                            emptyPolls = 0
+                        } else if (++emptyPolls >= 80) {
+                            throw IllegalStateException(
+                                "Модель не начала отвечать за 2 минуты. Проверь выбранную модель и подключение провайдера в OpenCode."
+                            )
+                        }
+                    }
+                    delay(1500)
                 }
-                // Страховка для движков без сигнала конца: ответ готов, если ~30 секунд ничего не менялось.
-                if (stable >= 45 && !t.toolRunning && t.hasText && asks.isEmpty()) break
-                delay(700)
+                onStage("Получаю результат модели")
+                collected
             }
-            onStage("Получаю результат модели")
-            val finalTurn = turn
-            require(finalTurn != null && (finalTurn.parts.isNotEmpty() || finalTurn.error != null)) {
-                "OpenCode не вернул ответ. Проверь, что выбранная модель доступна в каталоге."
+            return answer.ifBlank {
+                throw IllegalStateException("OpenCode не вернул текст ответа. Проверь, что выбранная модель доступна в каталоге.")
             }
-            return OcResult(sid, finalTurn, finalTurn.text)
         } finally {
             eventJob.cancel()
             runCatching { eventConnection.get()?.disconnect() }
             // Не затираем ссылки, если пользователь уже запустил следующий запрос.
             if (activeAbort === abortAction) activeAbort = null
-            // Сессию не удаляем: в ней живёт контекст чата.
+            // Каждый запрос создаёт отдельную сессию OpenCode: удаляем её, чтобы они не копились в базе.
+            runCatching { request("api/session/${enc(sessionId)}", method = "DELETE", readTimeoutMs = 15000) }
         }
     }
 
-    private fun clearLive() {
-        liveTurn = emptyList()
-        deltaPieces = emptyList()
-        asks = emptyList()
+    /** Сообщение ассистента: в API встречается и type, и role. */
+    private fun isAssistantMessage(message: JSONObject): Boolean {
+        val kind = message.optString("type").ifBlank { message.optString("role") }
+        return kind == "assistant"
     }
 
-    /** То, что модель делает прямо сейчас: сохранённые части хода с наложенным потоком текста и рассуждений. */
-    fun liveShown(): List<MsgPart> {
-        val byMessage = deltaPieces.groupBy { it.message }
-        fun piece(l: DeltaPiece): MsgPart = if (l.reasoning) MsgPart.Reasoning(l.text) else MsgPart.Text(l.text)
-        val out = mutableListOf<MsgPart>()
-        for (m in liveTurn) {
-            val parts = m.parts.toMutableList()
-            for (l in byMessage[m.id].orEmpty()) {
-                if (l.text.isBlank()) continue
-                // ordinal-я сохранённая часть того же вида, если opencode её уже записал
-                val same = parts.withIndex().filter { (_, p) -> if (l.reasoning) p is MsgPart.Reasoning else p is MsgPart.Text }
-                val stored = same.getOrNull(l.ordinal)
-                if (stored == null) {
-                    parts += piece(l)
-                } else {
-                    val old = when (val p = stored.value) { is MsgPart.Text -> p.text; is MsgPart.Reasoning -> p.text; else -> "" }
-                    if (old.length < l.text.length) {
-                        val keepMs = (stored.value as? MsgPart.Reasoning)?.ms ?: 0L
-                        parts[stored.index] = if (l.reasoning) MsgPart.Reasoning(l.text, keepMs) else MsgPart.Text(l.text)
-                    }
+    /** Текст ответа из списка сообщений сессии (как в Margy) или из готового сообщения (legacy). */
+    private fun extractAssistantText(payload: JSONObject): String {
+        // Legacy POST /message: { parts: [...] } или { data: { parts: [...] } }
+        val directParts = payload.optJSONArray("parts")
+            ?: payload.optJSONObject("data")?.optJSONArray("parts")
+        if (directParts != null) return joinTextParts(directParts)
+
+        val messages = payload.optJSONArray("data") ?: return ""
+        val builder = StringBuilder()
+        for (i in 0 until messages.length()) {
+            val message = messages.optJSONObject(i) ?: continue
+            if (!isAssistantMessage(message)) continue
+            // content (Margy/OpenCode) или parts
+            val parts = message.optJSONArray("content")
+                ?: message.optJSONArray("parts")
+                ?: continue
+            val text = joinTextParts(parts)
+            if (text.isNotBlank()) {
+                if (builder.isNotEmpty()) builder.append('\n')
+                builder.append(text)
+            } else {
+                // Иногда текст лежит прямо в message.text
+                message.optString("text").takeIf { it.isNotBlank() }?.let {
+                    if (builder.isNotEmpty()) builder.append('\n')
+                    builder.append(it)
                 }
             }
-            out += parts
         }
-        val known = liveTurn.map { it.id }.toSet()
-        for ((id, pieces) in byMessage) if (id !in known) pieces.filter { it.text.isNotBlank() }.forEach { out += piece(it) }
-        return out
+        return builder.toString().trim()
     }
 
-    /**
-     * Поток событий OpenCode: рассуждения и печатаемый ответ дельтами, запросы разрешений, конец хода.
-     * Соединение без таймаута чтения (долгая «тишина» при размышлении — это нормально)
-     * и с переподключением, как у Margy.
-     */
-    private fun listenOpenCodeEvents(
-        root: String,
-        password: String,
-        sessionId: String,
-        connectionRef: AtomicReference<HttpURLConnection?>,
-        executionEnded: java.util.concurrent.atomic.AtomicBoolean
-    ): Job = viewModelScope.launch(Dispatchers.IO) {
-        // Текст и рассуждения нумеруются отдельно у каждого сообщения ассистента: кусок известен по трём полям.
-        val pieces = LinkedHashMap<Triple<String, Boolean, Int>, StringBuilder>()
-        var lastPublish = 0L
-
-        fun publish(force: Boolean = false) {
-            val now = System.currentTimeMillis()
-            if (!force && now - lastPublish < 80) return
-            lastPublish = now
-            val snapshot = pieces.map { (k, v) -> DeltaPiece(k.first, k.second, k.third, v.toString()) }
-            viewModelScope.launch(Dispatchers.Main) { deltaPieces = snapshot }
-        }
-
-        fun handle(raw: String) {
-            val envelope = JSONObject(raw)
-            val payload = envelope.optJSONObject("payload")
-            // Новый API шлёт {type, data:{...}}, старый — {payload:{type, properties:{...}}}.
-            val event = payload?.optJSONObject("event") ?: payload ?: envelope
-            val type = event.optString("type")
-            val props = event.optJSONObject("properties")
-                ?: event.optJSONObject("data")
-                ?: JSONObject()
-            val eventSession = props.optString("sessionID").ifBlank { props.optString("sessionId") }
-            if (eventSession.isNotBlank() && eventSession != sessionId) return
-
-            when {
-                (type == "session.reasoning.delta" || type == "session.text.delta") && props.has("delta") -> {
-                    val message = props.optString("assistantMessageID")
-                    if (message.isNotBlank()) {
-                        val key = Triple(message, type == "session.reasoning.delta", props.optInt("ordinal"))
-                        pieces.getOrPut(key) { StringBuilder() }.append(props.optString("delta"))
-                        publish()
-                    }
-                }
-                // Любое session.execution.* кроме started — ход завершён (успех, ошибка или прерывание).
-                type.startsWith("session.execution.") && type != "session.execution.started" -> {
-                    executionEnded.set(true)
-                    publish(force = true)
-                }
-                type.startsWith("permission.") -> refreshAsks()
+    private fun joinTextParts(parts: JSONArray): String = buildList {
+        for (i in 0 until parts.length()) {
+            val part = parts.optJSONObject(i) ?: continue
+            when (part.optString("type")) {
+                "text", "" -> part.optString("text").takeIf { it.isNotBlank() }?.let(::add)
+                // reasoning не включаем в финальный ответ пользователю
             }
         }
+    }.joinToString("\n").trim()
 
-        var failures = 0
-        while (isActive && failures < 20) {
-            val connection = (URL("$root/api/event").openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 10000
-                readTimeout = 0 // поток живёт, пока идёт запрос
-                setRequestProperty("Accept", "text/event-stream")
-                setRequestProperty("Cache-Control", "no-cache")
-                if (password.isNotBlank()) {
-                    val encoded = Base64.encodeToString("opencode:$password".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                    setRequestProperty("Authorization", "Basic $encoded")
-                }
+    private fun sessionHasAssistantMessage(payload: JSONObject): Boolean {
+        val messages = payload.optJSONArray("data") ?: return false
+        for (i in 0 until messages.length()) {
+            if (isAssistantMessage(messages.optJSONObject(i) ?: continue)) return true
+        }
+        return false
+    }
+
+    private fun assistantMessagesCompleted(payload: JSONObject): Boolean {
+        val messages = payload.optJSONArray("data") ?: return true
+        var sawAssistant = false
+        for (i in 0 until messages.length()) {
+            val message = messages.optJSONObject(i) ?: continue
+            if (!isAssistantMessage(message)) continue
+            sawAssistant = true
+            val completed = message.optJSONObject("time")?.optLong("completed", 0L) ?: 0L
+            if (completed <= 0L) return false
+        }
+        return sawAssistant
+    }
+
+    /** true, если сервер вообще сообщает о завершении шага (иначе ждём по «текст перестал меняться»). */
+    private fun assistantMessagesExposeCompletion(payload: JSONObject): Boolean {
+        val messages = payload.optJSONArray("data") ?: return false
+        for (i in 0 until messages.length()) {
+            val message = messages.optJSONObject(i) ?: continue
+            if (!isAssistantMessage(message)) continue
+            if (message.optJSONObject("time")?.has("completed") == true) return true
+        }
+        return false
+    }
+
+    /** Ошибка модели в последнем сообщении ассистента (без активного повтора). */
+    private fun assistantError(payload: JSONObject): String? {
+        val messages = payload.optJSONArray("data") ?: return null
+        for (i in messages.length() - 1 downTo 0) {
+            val message = messages.optJSONObject(i) ?: continue
+            if (!isAssistantMessage(message)) continue
+            if (message.optJSONObject("retry") != null) return null
+            val error = message.optJSONObject("error") ?: return null
+            return error.optString("message")
+                .ifBlank { error.optString("name") }
+                .ifBlank { error.optString("_tag") }
+                .ifBlank { "неизвестная ошибка" }
+        }
+        return null
+    }
+
+    private fun listenOpenCodeEvents(root: String, password: String, sessionId: String, connectionRef: AtomicReference<HttpURLConnection?>): Job = viewModelScope.launch(Dispatchers.IO) {
+        val connection = (URL("$root/api/event").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10000
+            readTimeout = 120000
+            setRequestProperty("Accept", "text/event-stream")
+            setRequestProperty("Cache-Control", "no-cache")
+            if (password.isNotBlank()) {
+                val encoded = Base64.encodeToString("opencode:$password".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                setRequestProperty("Authorization", "Basic $encoded")
             }
-            connectionRef.set(connection)
-            activeEventConnection = connection
-            if (!isActive) { connection.disconnect(); break }
-            try {
-                if (connection.responseCode !in 200..299) {
-                    failures++
-                } else {
-                    failures = 0
-                    connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                        val data = StringBuilder()
-                        while (isActive) {
-                            val line = reader.readLine() ?: break
-                            when {
-                                line.startsWith("data:") -> data.append(line.removePrefix("data:").trim())
-                                line.isEmpty() -> {
-                                    if (data.isNotEmpty()) {
-                                        val raw = data.toString(); data.clear()
-                                        runCatching { handle(raw) }
+        }
+        connectionRef.set(connection)
+        activeEventConnection = connection
+        if (!isActive) { connection.disconnect(); return@launch }
+        try {
+            if (connection.responseCode !in 200..299) return@launch
+            val listenerJob = currentCoroutineContext()[Job]
+            connection.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                var data = StringBuilder()
+                lines.forEach { line ->
+                    if (listenerJob?.isActive != true) return@useLines
+                    if (line.startsWith("data:")) data.append(line.removePrefix("data:").trim()).append(' ')
+                    if (line.isBlank() && data.isNotEmpty()) {
+                        val raw = data.toString().trim(); data = StringBuilder()
+                        runCatching {
+                            val envelope = JSONObject(raw)
+                            val payload = envelope.optJSONObject("payload")
+                            // Новый API шлёт {type, data:{...}}, старый — {payload:{type, properties:{...}}}.
+                            val event = payload?.optJSONObject("event") ?: payload ?: envelope
+                            val type = event.optString("type")
+                            val props = event.optJSONObject("properties")
+                                ?: event.optJSONObject("data")
+                                ?: JSONObject()
+                            val part = props.optJSONObject("part")
+                            val eventSession = props.optString("sessionID")
+                                .ifBlank { props.optString("sessionId") }
+                                .ifBlank { part?.optString("sessionID").orEmpty() }
+                            if (eventSession.isNotBlank() && eventSession != sessionId) return@runCatching
+
+                            // Как в Margy: без ответа на permission tools ждут вечно.
+                            // В YouCode пока нет UI подтверждений — автоматически разрешаем во время генерации.
+                            if (type.startsWith("permission.") || type.contains("permission.request")) {
+                                val permId = props.optString("id")
+                                    .ifBlank { props.optString("requestID") }
+                                    .ifBlank { part?.optString("id").orEmpty() }
+                                val sid = eventSession.ifBlank { sessionId }
+                                if (permId.isNotBlank() && sid.isNotBlank()) {
+                                    runCatching {
+                                        val c = (URL("$root/api/session/${java.net.URLEncoder.encode(sid, "UTF-8").replace("+", "%20")}/permission/${java.net.URLEncoder.encode(permId, "UTF-8").replace("+", "%20")}/reply").openConnection() as HttpURLConnection).apply {
+                                            requestMethod = "POST"
+                                            connectTimeout = 8000
+                                            readTimeout = 8000
+                                            doOutput = true
+                                            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                                            setRequestProperty("Accept", "application/json")
+                                            if (password.isNotBlank()) {
+                                                val encoded = Base64.encodeToString("opencode:$password".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                                                setRequestProperty("Authorization", "Basic $encoded")
+                                            }
+                                        }
+                                        c.outputStream.use { it.write(JSONObject().put("decision", "allow").toString().toByteArray(Charsets.UTF_8)) }
+                                        c.responseCode
+                                        c.disconnect()
+                                    }
+                                    viewModelScope.launch(Dispatchers.Main) {
+                                        generationStatus = "Разрешён tool · $permId".take(80)
+                                        if (generationActivities.lastOrNull()?.startsWith("permission") != true) {
+                                            generationActivities.add("permission · allow · #${permId.take(8)}")
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Reasoning stream — как live «Думает…» в Margy
+                            if (type.contains("reasoning.delta") || type == "session.reasoning.delta") {
+                                val delta = props.optString("delta")
+                                    .ifBlank { props.optString("text") }
+                                    .ifBlank { part?.optString("text").orEmpty() }
+                                if (delta.isNotBlank()) {
+                                    viewModelScope.launch(Dispatchers.Main) {
+                                        isReasoningLive = true
+                                        liveReasoning += delta
+                                        generationStatus = "Думает…"
+                                    }
+                                }
+                            }
+                            if (type.contains("reasoning") && (type.endsWith(".completed") || type.endsWith(".done") || type.endsWith(".end"))) {
+                                viewModelScope.launch(Dispatchers.Main) { isReasoningLive = false }
+                            }
+                            // part.updated с reasoning
+                            if (type.contains("part.updated") && part?.optString("type") == "reasoning") {
+                                val text = part.optString("text")
+                                if (text.isNotBlank()) {
+                                    viewModelScope.launch(Dispatchers.Main) {
+                                        isReasoningLive = true
+                                        if (text.length > liveReasoning.length) liveReasoning = text
+                                        generationStatus = "Думает…"
+                                    }
+                                }
+                            }
+
+                            val label = when {
+                                // Новый API: session.tool.called / .progress / .success / .failed.
+                                type.contains("tool.") -> {
+                                    val tool = props.optString("tool").ifBlank { props.optString("name") }
+                                    val toolId = props.optString("id").ifBlank { props.optString("toolCallID") }
+                                    val input = props.optJSONObject("input") ?: JSONObject()
+                                    val command = input.optString("command")
+                                        .ifBlank { input.optString("filePath") }
+                                        .ifBlank { input.optString("path") }
+                                        .ifBlank { input.optString("pattern") }
+                                        .ifBlank { input.optString("query") }
+                                    buildString {
+                                        append(tool.ifBlank { "Инструмент" })
+                                        if (toolId.isNotBlank()) append(" · #").append(toolId.take(8))
+                                        append(" · ")
+                                        append(
+                                            when {
+                                                type.endsWith(".success") || type.endsWith(".completed") -> "завершено"
+                                                type.endsWith(".failed") || type.endsWith(".error") -> "ошибка"
+                                                else -> "выполняется"
+                                            }
+                                        )
+                                        if (command.isNotBlank()) append(" · ").append(command.take(180))
+                                    }
+                                }
+                                // Старый API: part.updated с part.type == "tool".
+                                type.contains("part.updated") && part?.optString("type") == "tool" -> {
+                                    val tool = part.optString("tool").ifBlank { part.optString("name") }.ifBlank { "Инструмент" }
+                                    val toolId = part.optString("id")
+                                    val state = part.optJSONObject("state") ?: JSONObject()
+                                    val status = state.optString("status")
+                                    val title = state.optString("title").ifBlank { state.optString("description") }
+                                    val input = state.optJSONObject("input") ?: JSONObject()
+                                    val command = input.optString("command")
+                                        .ifBlank { input.optString("filePath") }
+                                        .ifBlank { input.optString("path") }
+                                        .takeIf { it.isNotBlank() }
+                                    buildString {
+                                        append(tool)
+                                        if (toolId.isNotBlank()) append(" · #").append(toolId.take(8))
+                                        if (status.isNotBlank()) append(" · ").append(
+                                            when (status) {
+                                                "running", "pending" -> "выполняется"
+                                                "completed", "success" -> "завершено"
+                                                "error", "failed" -> "ошибка"
+                                                else -> status
+                                            }
+                                        )
+                                        (title.takeIf { it.isNotBlank() } ?: command)?.let { append(" · ").append(it.take(180)) }
+                                    }
+                                }
+                                type == "session.execution.failed" -> "Ошибка выполнения: " +
+                                    props.optJSONObject("error")?.optString("message").orEmpty().ifBlank { "неизвестная ошибка" }
+                                type.contains("execution.started") -> "Агент начал работу"
+                                type.contains("execution.completed") || type.contains("execution.finished") -> "Агент закончил"
+                                else -> null
+                            }
+                            if (label != null) {
+                                viewModelScope.launch(Dispatchers.Main) {
+                                    if (generationActivities.lastOrNull() != label) generationActivities.add(label)
+                                    if (generationActivities.size > 40) generationActivities.removeAt(0)
+                                    if (label.contains("выполняется") || label.contains("Инструмент") || label.contains("·")) {
+                                        generationStatus = label.take(80)
                                     }
                                 }
                             }
                         }
                     }
                 }
-            } catch (_: Exception) {
-                // Поток событий необязателен: ход всё равно читается из списка сообщений.
-                failures++
-            } finally {
-                if (activeEventConnection === connection) activeEventConnection = null
-                connection.disconnect()
             }
-            if (isActive) delay(1000)
+        } catch (_: Exception) {
+            // Event streaming is optional; the ordinary message response remains authoritative.
+        } finally {
+            if (activeEventConnection === connection) activeEventConnection = null
+            connection.disconnect()
         }
     }
 
@@ -1219,7 +1409,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 append("\n\n[Файл: ${file.name}]\n")
                 append(file.contentPreview.takeIf { it.isNotBlank() }?.take(20000) ?: "Содержимое файла недоступно для текстового API.")
             }
-            if (workingFolderName != null) append("\n\nРабочая папка: $workingFolderName. Файлы: ${workingFolderFiles.take(30).joinToString()}")
+            if (workingFolderName != null) {
+                append("\n\nРабочая папка: ${agentFolder().absolutePath}")
+                append("\nИмя: $workingFolderName")
+                append("\nФайлы: ${workingFolderFiles.take(30).joinToString()}")
+                append("\n(Облачный API не имеет прямого доступа к файлам телефона — при необходимости пользователь прикрепляет содержимое.)")
+            }
         }
         val body = JSONObject()
             .put("model", model)
@@ -1285,7 +1480,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 else append("Содержимое файла недоступно для текстового API.")
             }
             if (workingFolderName != null) {
-                append("\n\nРабочая папка: $workingFolderName. Файлы: ${workingFolderFiles.take(30).joinToString()}")
+                append("\n\nРабочая папка: ${agentFolder().absolutePath}")
+                append("\nИмя: $workingFolderName")
+                append("\nФайлы: ${workingFolderFiles.take(30).joinToString()}")
+                append("\n(Облачный API не имеет прямого доступа к файлам телефона — при необходимости пользователь прикрепляет содержимое.)")
             }
         }
         val messagesJson = JSONArray()

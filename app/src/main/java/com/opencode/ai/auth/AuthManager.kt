@@ -1,5 +1,6 @@
 package com.opencode.ai.auth
 
+import com.opencode.ai.BuildConfig
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -27,16 +28,15 @@ class AuthManager(private val context: Context) {
         private const val PREFS = "youcode_auth"
         private const val TOKEN = "session"
         private const val KEY_ALIAS = "youcode_auth_key"
-        private const val BASE = "https://gzuzyagiqgvpeqkksaml.supabase.co"
-        private const val API_KEY = "sb_publishable_gXGst8Hdc4LbcdGqMF4MbA_bwAodaTr"
+        private val BASE = BuildConfig.SUPABASE_URL
+        private val API_KEY = BuildConfig.SUPABASE_PUBLISHABLE_KEY
     }
 
     /** Ссылка на бота: Telegram откроется на стороне пользователя, а токен нужен для опроса результата. */
     suspend fun startTelegramLogin(): TelegramLogin = withContext(Dispatchers.IO) {
         val (code, json) = functionRequest(JSONObject().put("action", "start"))
         if (code !in 200..299 || json.optString("token").isBlank() || json.optString("url").isBlank()) {
-            // Код 200 тут значит «сервер ответил, но не токеном и ссылкой»: показываем, что именно пришло.
-            throw AuthHttpException(code, "Не удалось начать вход через Telegram ($code): ${serverDetail(json)}")
+            throw AuthHttpException(code, "Не удалось начать вход через Telegram ($code)")
         }
         TelegramLogin(json.getString("token"), json.getString("url"))
     }
@@ -50,9 +50,7 @@ class AuthManager(private val context: Context) {
         }
         when {
             code == 410 -> throw AuthHttpException(code, "Ссылка для входа устарела. Попробуйте ещё раз.")
-            // Временный сбой сервера (5xx) не должен обрывать вход: продолжаем опрашивать.
-            code >= 500 -> null
-            code !in 200..299 -> throw AuthHttpException(code, "Ошибка входа через Telegram ($code): ${serverDetail(json)}")
+            code !in 200..299 -> throw AuthHttpException(code, "Ошибка входа через Telegram ($code)")
             json.optString("status") == "ok" -> sessionFrom(json).also(::save)
             else -> null
         }
@@ -61,21 +59,17 @@ class AuthManager(private val context: Context) {
     private fun functionRequest(body: JSONObject): Pair<Int, JSONObject> {
         val c = (URL("$BASE/functions/v1/telegram-auth").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"; connectTimeout = 15000; readTimeout = 30000; doOutput = true
-            setRequestProperty("apikey", API_KEY); setRequestProperty("Content-Type", "application/json")
+            // Supabase Edge Functions часто требуют оба заголовка; без Authorization бывает 401.
+            setRequestProperty("apikey", API_KEY)
+            setRequestProperty("Authorization", "Bearer $API_KEY")
+            setRequestProperty("Content-Type", "application/json")
         }
         c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         val code = c.responseCode
         val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
         c.disconnect()
-        return code to runCatching { JSONObject(text) }.getOrElse { JSONObject().put("_raw", text.take(300)) }
+        return code to runCatching { JSONObject(text) }.getOrDefault(JSONObject())
     }
-
-    /** Что вернул сервер вместо ожидаемого ответа: поле error/detail или начало тела. */
-    private fun serverDetail(json: JSONObject): String =
-        listOf("detail", "error", "message", "msg", "_raw")
-            .map { json.optString(it) }
-            .firstOrNull { it.isNotBlank() }
-            ?: "пустой ответ"
 
     /**
      * Обновляет токены по refresh_token. Если Supabase отклонил сессию (400/401/403) — выходим из аккаунта и возвращаем null.
@@ -116,7 +110,9 @@ class AuthManager(private val context: Context) {
     private fun request(path: String, body: JSONObject): JSONObject {
         val c = (URL(BASE + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"; connectTimeout = 15000; readTimeout = 20000; doOutput = true
-            setRequestProperty("apikey", API_KEY); setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("apikey", API_KEY)
+            setRequestProperty("Authorization", "Bearer $API_KEY")
+            setRequestProperty("Content-Type", "application/json")
         }
         c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         val code = c.responseCode

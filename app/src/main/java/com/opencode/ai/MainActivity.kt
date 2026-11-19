@@ -11,12 +11,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
-import com.opencode.ai.auth.AuthManager
-import com.opencode.ai.auth.AuthScreen
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.opencode.ai.auth.AuthManager
+import com.opencode.ai.auth.AuthScreen
 import com.opencode.ai.ui.screens.MainScreen
 import com.opencode.ai.ui.theme.YouCodeTheme
 import com.opencode.ai.viewmodel.ChatViewModel
