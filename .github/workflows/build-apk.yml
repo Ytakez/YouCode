@@ -69,22 +69,22 @@ jobs:
           echo "APK: $APK"
           if ! unzip -l "$APK" | grep -q 'lib/arm64-v8a/libopencode.so'; then
             echo "::error::В APK нет lib/arm64-v8a/libopencode.so — OpenCode не заработает"
-            unzip -l "$APK" | grep -i 'lib/' || true
             exit 1
           fi
           echo "OK: libopencode.so внутри APK"
 
-      - name: Upload APK
+      - name: Upload APK artifact (не блокирует релиз)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: YouCode-APK-${{ github.run_number }}
           path: app/build/outputs/apk/debug/*.apk
-          retention-days: 14
+          retention-days: 1
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: YouCode build ${{ github.run_number }} (1.3.10)
+          name: YouCode build ${{ github.run_number }}
           files: app/build/outputs/apk/debug/app-debug.apk
           fail_on_unmatched_files: true
