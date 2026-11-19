@@ -35,10 +35,20 @@ class AuthManager(private val context: Context) {
     /** Ссылка на бота: Telegram откроется на стороне пользователя, а токен нужен для опроса результата. */
     suspend fun startTelegramLogin(): TelegramLogin = withContext(Dispatchers.IO) {
         val (code, json) = functionRequest(JSONObject().put("action", "start"))
-        if (code !in 200..299 || json.optString("token").isBlank() || json.optString("url").isBlank()) {
-            throw AuthHttpException(code, "Не удалось начать вход через Telegram ($code)")
+        // Edge Function может вернуть url или link (в проде сейчас link).
+        val token = json.optString("token")
+        val url = json.optString("url").ifBlank { json.optString("link") }
+        if (code !in 200..299) {
+            val detail = json.optString("error").ifBlank { json.optString("message") }
+            throw AuthHttpException(code, "Не удалось начать вход через Telegram ($code)${if (detail.isNotBlank()) ": $detail" else ""}")
         }
-        TelegramLogin(json.getString("token"), json.getString("url"))
+        if (token.isBlank() || url.isBlank()) {
+            throw AuthHttpException(
+                code,
+                "Не удалось начать вход через Telegram: в ответе нет token/url (${json.toString().take(200)})"
+            )
+        }
+        TelegramLogin(token, url)
     }
 
     /** null — пользователь ещё не подтвердил вход в боте (или временно нет сети). */

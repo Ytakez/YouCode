@@ -27,7 +27,7 @@ Deno.serve(async (req) => {
     const token = randomToken();
     const { error } = await admin.from(TABLE).insert({ token });
     if (error) return json({ error: "db" }, 500);
-    return json({ token, url: `https://t.me/${BOT_USERNAME}?start=${token}` });
+    return json({ token, url: `https://t.me/${BOT_USERNAME}?start=${token}`, link: `https://t.me/${BOT_USERNAME}?start=${token}` });
   }
 
   if (body.action === "poll") {
