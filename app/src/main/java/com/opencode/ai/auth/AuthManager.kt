@@ -58,11 +58,20 @@ class AuthManager(private val context: Context) {
         } catch (e: java.io.IOException) {
             return@withContext null
         }
+        val status = json.optString("status")
         when {
-            code == 410 -> throw AuthHttpException(code, "Ссылка для входа устарела. Попробуйте ещё раз.")
-            code !in 200..299 -> throw AuthHttpException(code, "Ошибка входа через Telegram ($code)")
-            json.optString("status") == "ok" -> sessionFrom(json).also(::save)
-            else -> null
+            code == 410 || status == "expired" ->
+                throw AuthHttpException(410, "Ссылка для входа устарела. Попробуйте ещё раз.")
+            code !in 200..299 -> {
+                val detail = json.optString("error").ifBlank { json.optString("message") }
+                throw AuthHttpException(code, "Ошибка входа через Telegram ($code)${if (detail.isNotBlank()) ": $detail" else ""}")
+            }
+            // Ошибка сессии на стороне функции (раньше мог прийти 200 без user)
+            json.has("error") && status != "ok" && status != "pending" ->
+                throw AuthHttpException(code, "Ошибка входа: ${json.optString("error")}")
+            status == "ok" || json.has("access_token") || json.optJSONObject("session") != null ->
+                sessionFrom(json).also(::save)
+            else -> null // pending
         }
     }
 
@@ -107,9 +116,43 @@ class AuthManager(private val context: Context) {
     fun signOut() { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(TOKEN).apply() }
 
     private fun sessionFrom(j: JSONObject): AuthSession {
-        val user = j.optJSONObject("user") ?: throw IllegalStateException("Supabase не вернул данные пользователя")
-        return AuthSession(j.getString("access_token"), j.getString("refresh_token"), user.getString("id"), user.optString("email"))
+        // Плоские поля (наша Edge Function) или вложенный session (как у GoTrue).
+        val session = j.optJSONObject("session") ?: j
+        val access = session.optString("access_token").ifBlank { j.optString("access_token") }
+        val refresh = session.optString("refresh_token").ifBlank { j.optString("refresh_token") }
+        if (access.isBlank() || refresh.isBlank()) {
+            throw IllegalStateException(
+                "Supabase не вернул токены: ${j.toString().take(240)}"
+            )
+        }
+        val user = session.optJSONObject("user")
+            ?: j.optJSONObject("user")
+            ?: JSONObject()
+        var id = user.optString("id").ifBlank { user.optString("sub") }
+        var email = user.optString("email")
+        // Запасной путь: user id из JWT payload (access_token).
+        if (id.isBlank()) {
+            val payload = decodeJwtPayload(access)
+            id = payload?.optString("sub").orEmpty()
+            if (email.isBlank()) email = payload?.optString("email").orEmpty()
+        }
+        if (id.isBlank()) {
+            throw IllegalStateException(
+                "Supabase не вернул данные пользователя: ${j.toString().take(240)}"
+            )
+        }
+        return AuthSession(access, refresh, id, email)
     }
+
+    /** Декодирует payload JWT без проверки подписи (только чтобы достать sub/email). */
+    private fun decodeJwtPayload(jwt: String): JSONObject? = runCatching {
+        val parts = jwt.split('.')
+        if (parts.size < 2) return null
+        val raw = parts[1]
+        val padded = raw + "=".repeat((4 - raw.length % 4) % 4)
+        val json = String(Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)
+        JSONObject(json)
+    }.getOrNull()
 
     private fun save(s: AuthSession) {
         val json = JSONObject().put("access", s.accessToken).put("refresh", s.refreshToken).put("id", s.userId).put("email", s.email).toString()

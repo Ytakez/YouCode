@@ -59,13 +59,19 @@ Deno.serve(async (req) => {
     if (linkError || !hashed) return json({ error: "link" }, 500);
     const { data: verified, error: verifyError } = await admin.auth.verifyOtp({ token_hash: hashed, type: "magiclink" });
     const session = verified?.session;
-    if (verifyError || !session) return json({ error: "session" }, 500);
+    if (verifyError || !session?.access_token || !session?.refresh_token) {
+      return json({ error: "session", detail: verifyError?.message ?? "no session" }, 500);
+    }
+
+    const userId = session.user?.id ?? verified?.user?.id ?? "";
+    const userEmail = session.user?.email ?? verified?.user?.email ?? email;
+    if (!userId) return json({ error: "user", detail: "session without user id" }, 500);
 
     return json({
       status: "ok",
       access_token: session.access_token,
       refresh_token: session.refresh_token,
-      user: { id: session.user.id, email: session.user.email },
+      user: { id: userId, email: userEmail },
     });
   }
 
