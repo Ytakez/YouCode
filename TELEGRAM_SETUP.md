@@ -9,7 +9,7 @@
    ```
    supabase secrets set TELEGRAM_BOT_TOKEN=123456:ABC... TELEGRAM_BOT_USERNAME=your_bot TELEGRAM_WEBHOOK_SECRET=случайная_строка --project-ref gzuzyagiqgvpeqkksaml
    ```
-4. Задеплойте функции (флаг `--no-verify-jwt` обязателен: приложение шлёт publishable key, а Telegram — свой заголовок):
+4. Задеплойте функции (после обновления кода `telegram-auth` задеплойте её заново) (флаг `--no-verify-jwt` обязателен: приложение шлёт publishable key, а Telegram — свой заголовок):
    ```
    supabase functions deploy telegram-auth --no-verify-jwt --project-ref gzuzyagiqgvpeqkksaml
    supabase functions deploy telegram-webhook --no-verify-jwt --project-ref gzuzyagiqgvpeqkksaml
@@ -26,6 +26,7 @@
 - Приложение → `telegram-auth` (`start`) → получает одноразовый токен и ссылку `t.me/<бот>?start=<токен>`.
 - Бот присылает кнопку «Это я, войти»; после нажатия Telegram ID записывается в запрос.
 - Приложение опрашивает `telegram-auth` (`poll`) и получает сессию. Токен живёт 10 минут и работает один раз.
+- Если выдать сессию не удалось (временный сбой Supabase), запрос возвращается в таблицу, а приложение повторяет опрос (до 5 ошибок подряд). Неподтверждённых запросов одновременно не больше 300.
 - Для каждого Telegram ID создаётся пользователь `tg<id>@users.youcode.app` (почта служебная, письма не отправляются).
 
 ## Важно

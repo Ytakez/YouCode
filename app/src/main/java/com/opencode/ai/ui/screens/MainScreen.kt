@@ -125,7 +125,7 @@ fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
                     val scale = 1f - 0.09f * animatedBack
                     scaleX = scale
                     scaleY = scale
-                    shape = RoundedCornerShape((32f * animatedBack).dp)
+                    shape = RoundedCornerShape((36f * animatedBack).dp)
                     clip = animatedBack > 0.001f
                 }
                 .background(MaterialTheme.colorScheme.background)

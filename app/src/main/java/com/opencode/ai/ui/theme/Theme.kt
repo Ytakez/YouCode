@@ -23,6 +23,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -31,10 +32,14 @@ import androidx.core.view.WindowCompat
 import androidx.compose.foundation.shape.RoundedCornerShape
 
 /**
- * Grok-inspired serious palette on top of Material Design 3.
- * Cool neutrals, high contrast, restrained accents. Dynamic color
- * still works on Android 12+, but surfaces stay deliberately neutral.
+ * 50 / 50: спокойная нейтральная палитра YouCode (Grok-like) + Material You
+ * из Android 17 (тональные поверхности от обоев, более округлые формы,
+ * выразительная типографика). Каждая поверхность — ровно посередине между
+ * нейтральным цветом и тональным цветом системы.
  */
+
+/** Доля Android 17 Material You (0 = старый стиль, 1 = полностью Android 17). */
+private const val ANDROID17_MIX = 0.5f
 
 private val LightColorScheme = lightColorScheme(
     primary = Color(0xFF2F4A7A),
@@ -49,19 +54,19 @@ private val LightColorScheme = lightColorScheme(
     onTertiary = Color(0xFFFFFFFF),
     tertiaryContainer = Color(0xFFF2DAFF),
     onTertiaryContainer = Color(0xFF251431),
-    background = Color(0xFFF8F9FC),
-    onBackground = Color(0xFF1A1C1E),
-    surface = Color(0xFFF8F9FC),
-    onSurface = Color(0xFF1A1C1E),
-    surfaceVariant = Color(0xFFE1E2EC),
-    onSurfaceVariant = Color(0xFF44474F),
-    outline = Color(0xFF74777F),
-    outlineVariant = Color(0xFFC4C6D0),
+    background = Color(0xFFF9F9FF),
+    onBackground = Color(0xFF191C20),
+    surface = Color(0xFFF9F9FF),
+    onSurface = Color(0xFF191C20),
+    surfaceVariant = Color(0xFFE0E2EC),
+    onSurfaceVariant = Color(0xFF43474E),
+    outline = Color(0xFF73777F),
+    outlineVariant = Color(0xFFC3C6CF),
     surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFF2F3F7),
-    surfaceContainer = Color(0xFFECEDF1),
-    surfaceContainerHigh = Color(0xFFE6E8EC),
-    surfaceContainerHighest = Color(0xFFE1E2E6)
+    surfaceContainerLow = Color(0xFFF3F3FA),
+    surfaceContainer = Color(0xFFEDEDF4),
+    surfaceContainerHigh = Color(0xFFE7E8EE),
+    surfaceContainerHighest = Color(0xFFE2E2E9)
 )
 
 private val DarkColorScheme = darkColorScheme(
@@ -77,73 +82,85 @@ private val DarkColorScheme = darkColorScheme(
     onTertiary = Color(0xFF3B2948),
     tertiaryContainer = Color(0xFF523F5F),
     onTertiaryContainer = Color(0xFFF2DAFF),
-    background = Color(0xFF0B0C0E),
-    onBackground = Color(0xFFE2E2E6),
-    surface = Color(0xFF0B0C0E),
-    onSurface = Color(0xFFE2E2E6),
-    surfaceVariant = Color(0xFF44474F),
-    onSurfaceVariant = Color(0xFFC4C6D0),
-    outline = Color(0xFF8E9099),
-    outlineVariant = Color(0xFF44474F),
-    surfaceContainerLowest = Color(0xFF060708),
-    surfaceContainerLow = Color(0xFF141516),
-    surfaceContainer = Color(0xFF1A1B1D),
-    surfaceContainerHigh = Color(0xFF242528),
-    surfaceContainerHighest = Color(0xFF2F3033)
-)
-
-/** Slightly tighter radii than the previous expressive set — cleaner, more serious. */
-private val YouCodeShapes = Shapes(
-    extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(20.dp),
-    extraLarge = RoundedCornerShape(28.dp)
+    background = Color(0xFF111318),
+    onBackground = Color(0xFFE2E2E9),
+    surface = Color(0xFF111318),
+    onSurface = Color(0xFFE2E2E9),
+    surfaceVariant = Color(0xFF43474E),
+    onSurfaceVariant = Color(0xFFC3C6CF),
+    outline = Color(0xFF8D9199),
+    outlineVariant = Color(0xFF43474E),
+    surfaceContainerLowest = Color(0xFF0C0E13),
+    surfaceContainerLow = Color(0xFF191C20),
+    surfaceContainer = Color(0xFF1D2024),
+    surfaceContainerHigh = Color(0xFF282A2F),
+    surfaceContainerHighest = Color(0xFF33353A)
 )
 
 /**
- * Forces neutral surfaces so the UI stays close to Grok's calm dark look
- * even when dynamic color pulls strong hues from the wallpaper.
+ * Формы: середина между прежними (8/12/16/20/28) и Material 3 Expressive
+ * из Android 17 (12/16/24/32/44).
  */
-private fun ColorScheme.withNeutralSurfaces(dark: Boolean): ColorScheme =
+private val YouCodeShapes = Shapes(
+    extraSmall = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(14.dp),
+    medium = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(26.dp),
+    extraLarge = RoundedCornerShape(36.dp)
+)
+
+private fun mix(neutral: Color, tonal: Color): Color = lerp(neutral, tonal, ANDROID17_MIX)
+
+/**
+ * Поверхности и текст: 50% нейтральных цветов YouCode и 50% тональных цветов
+ * Material You (на Android 12+ — из обоев). Акценты (primary/secondary/tertiary
+ * и их контейнеры) остаются полностью от системы, как в Android 17.
+ */
+private fun ColorScheme.blendedWithNeutral(dark: Boolean): ColorScheme =
     if (dark) copy(
-        background = Color(0xFF0B0C0E),
-        surface = Color(0xFF0B0C0E),
-        surfaceTint = Color(0xFF0B0C0E),
-        onBackground = Color(0xFFE2E2E6),
-        onSurface = Color(0xFFE2E2E6),
-        surfaceVariant = Color(0xFF2A2B2E),
-        onSurfaceVariant = Color(0xFFB0B3BB),
-        surfaceContainerLowest = Color(0xFF060708),
-        surfaceContainerLow = Color(0xFF141516),
-        surfaceContainer = Color(0xFF1A1B1D),
-        surfaceContainerHigh = Color(0xFF242528),
-        surfaceContainerHighest = Color(0xFF2F3033),
-        outline = Color(0xFF8E9099),
-        outlineVariant = Color(0xFF3A3B3E)
+        background = mix(Color(0xFF0B0C0E), background),
+        surface = mix(Color(0xFF0B0C0E), surface),
+        surfaceTint = primary,
+        onBackground = mix(Color(0xFFE2E2E6), onBackground),
+        onSurface = mix(Color(0xFFE2E2E6), onSurface),
+        surfaceVariant = mix(Color(0xFF2A2B2E), surfaceVariant),
+        onSurfaceVariant = mix(Color(0xFFB0B3BB), onSurfaceVariant),
+        surfaceContainerLowest = mix(Color(0xFF060708), surfaceContainerLowest),
+        surfaceContainerLow = mix(Color(0xFF141516), surfaceContainerLow),
+        surfaceContainer = mix(Color(0xFF1A1B1D), surfaceContainer),
+        surfaceContainerHigh = mix(Color(0xFF242528), surfaceContainerHigh),
+        surfaceContainerHighest = mix(Color(0xFF2F3033), surfaceContainerHighest),
+        outline = mix(Color(0xFF8E9099), outline),
+        outlineVariant = mix(Color(0xFF3A3B3E), outlineVariant)
     ) else copy(
-        background = Color(0xFFF8F9FC),
-        surface = Color(0xFFF8F9FC),
-        surfaceTint = Color(0xFFF8F9FC),
-        onBackground = Color(0xFF1A1C1E),
-        onSurface = Color(0xFF1A1C1E),
-        surfaceVariant = Color(0xFFE1E2EC),
-        onSurfaceVariant = Color(0xFF44474F),
-        surfaceContainerLowest = Color(0xFFFFFFFF),
-        surfaceContainerLow = Color(0xFFF2F3F7),
-        surfaceContainer = Color(0xFFECEDF1),
-        surfaceContainerHigh = Color(0xFFE6E8EC),
-        surfaceContainerHighest = Color(0xFFE1E2E6),
-        outline = Color(0xFF74777F),
-        outlineVariant = Color(0xFFC4C6D0)
+        background = mix(Color(0xFFF8F9FC), background),
+        surface = mix(Color(0xFFF8F9FC), surface),
+        surfaceTint = primary,
+        onBackground = mix(Color(0xFF1A1C1E), onBackground),
+        onSurface = mix(Color(0xFF1A1C1E), onSurface),
+        surfaceVariant = mix(Color(0xFFE1E2EC), surfaceVariant),
+        onSurfaceVariant = mix(Color(0xFF44474F), onSurfaceVariant),
+        surfaceContainerLowest = mix(Color(0xFFFFFFFF), surfaceContainerLowest),
+        surfaceContainerLow = mix(Color(0xFFF2F3F7), surfaceContainerLow),
+        surfaceContainer = mix(Color(0xFFECEDF1), surfaceContainer),
+        surfaceContainerHigh = mix(Color(0xFFE6E8EC), surfaceContainerHigh),
+        surfaceContainerHighest = mix(Color(0xFFE1E2E6), surfaceContainerHighest),
+        outline = mix(Color(0xFF74777F), outline),
+        outlineVariant = mix(Color(0xFFC4C6D0), outlineVariant)
     )
 
 @Composable
 fun YouCodeTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: String = "system",
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
+    val darkTheme = when (themeMode) {
+        "light" -> false
+        "dark" -> true
+        else -> isSystemInDarkTheme()
+    }
+
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var paletteRevision by remember { mutableIntStateOf(0) }
@@ -164,8 +181,8 @@ fun YouCodeTheme(
         else -> LightColorScheme
     }
 
-    // Neutral surfaces (Grok-like), accents stay from palette / dynamic color.
-    val colorScheme = baseScheme.withNeutralSurfaces(darkTheme)
+    // 50% нейтральные поверхности YouCode + 50% тональные поверхности Material You.
+    val colorScheme = baseScheme.blendedWithNeutral(darkTheme)
 
     val animatedScheme = colorScheme.copy(
         primary = animateColorAsState(colorScheme.primary, tween(420)).value,

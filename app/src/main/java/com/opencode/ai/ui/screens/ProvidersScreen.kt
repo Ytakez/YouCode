@@ -37,7 +37,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.MediumTopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,6 +48,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import android.content.Intent
 import android.net.Uri
@@ -126,10 +129,13 @@ fun ProvidersScreen(
     val liveProviders = filtered.filter { it.category == "opencode-live" }
     val keyProviders = filtered.filter { it.category == "key" }
 
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = { Text("Провайдеры") },
+            MediumTopAppBar(
+                scrollBehavior = scrollBehavior,
+                title = { Text("Провайдеры", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
@@ -141,7 +147,8 @@ fun ProvidersScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
                 )
             )
         },
@@ -206,7 +213,7 @@ fun ProvidersScreen(
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("Поиск") },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                shape = RoundedCornerShape(32.dp),
+                shape = RoundedCornerShape(50),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
@@ -221,8 +228,11 @@ fun ProvidersScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
                         .clickable { dialogItem = item }
-                        .padding(vertical = 12.dp)
+                        .padding(horizontal = 18.dp, vertical = 14.dp)
                 ) {
                     Text(item.name, style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -372,8 +382,8 @@ private fun KeyDialog(
                         label = { Text(if (item.id == "opencode-server") "Модель (не используется — выбери на сервере)" else "Модель") }, placeholder = { Text(if (item.id == "opencode-server") "server-default" else "точный ID модели из каталога провайдера") }, singleLine = true)
                     if (item.id != "opencode-server") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { protocol = "openai" }) { Text(if (protocol == "openai") "✓ OpenAI API" else "OpenAI API") }
-                            TextButton(onClick = { protocol = "anthropic" }) { Text(if (protocol == "anthropic") "✓ Claude API" else "Claude API") }
+                            TextButton(onClick = { protocol = "openai" }) { Text("OpenAI API", fontWeight = if (protocol == "openai") FontWeight.Bold else FontWeight.Normal, color = if (protocol == "openai") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                            TextButton(onClick = { protocol = "anthropic" }) { Text("Claude API", fontWeight = if (protocol == "anthropic") FontWeight.Bold else FontWeight.Normal, color = if (protocol == "anthropic") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
                         }
                         Spacer(Modifier.height(8.dp))
                     }
@@ -424,7 +434,7 @@ private fun KeyDialog(
 private fun ProviderCard(item: ProviderItem, connected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(30.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = modifier.fillMaxWidth().pressScale(0.97f)
     ) {
@@ -433,7 +443,7 @@ private fun ProviderCard(item: ProviderItem, connected: Boolean, onClick: () -> 
             verticalAlignment = Alignment.Top
         ) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
                 modifier = Modifier.size(40.dp)
             ) {

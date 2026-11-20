@@ -9,9 +9,11 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.graphics.SolidColor
 import android.content.Intent
 import android.net.Uri
+import android.graphics.BitmapFactory
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.documentfile.provider.DocumentFile
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -27,7 +29,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import com.opencode.ai.ui.theme.entrance
@@ -46,6 +50,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -58,6 +63,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -82,10 +88,16 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.InsertDriveFile
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -185,7 +197,46 @@ fun ChatScreen(
     }
 
 
-    val openTreeLauncher = rememberLauncherForActivityResult(
+    
+    val pickPhotoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(6)
+    ) { uris: List<Uri> ->
+        uris.forEach { uri ->
+            scope.launch {
+                val name = queryDisplayName(context, uri) ?: "photo.jpg"
+                val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+                val (size, preview) = withContext(Dispatchers.IO) {
+                    // Для фото preview короткий; байты не читаем целиком в строку
+                    val len = runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { inp ->
+                            var n = 0L
+                            val buf = ByteArray(8192)
+                            while (true) {
+                                val r = inp.read(buf)
+                                if (r <= 0) break
+                                n += r
+                                if (n > 12_000_000) break
+                            }
+                            n
+                        } ?: 0L
+                    }.getOrDefault(0L)
+                    len to "[Изображение]"
+                }
+                viewModel.addAttachment(
+                    AttachedFile(
+                        id = UUID.randomUUID().toString(),
+                        name = name,
+                        uri = uri,
+                        mimeType = mime,
+                        sizeBytes = size,
+                        contentPreview = preview
+                    )
+                )
+            }
+        }
+    }
+
+val openTreeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
@@ -288,7 +339,7 @@ fun ChatScreen(
                 Surface(
                     onClick = onModelClick,
                     modifier = Modifier.pressScale(0.94f),
-                    shape = RoundedCornerShape(22.dp),
+                    shape = RoundedCornerShape(26.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
@@ -371,6 +422,8 @@ fun ChatScreen(
                                 activities = viewModel.generationActivities,
                                 reasoning = viewModel.liveReasoning,
                                 reasoningLive = viewModel.isReasoningLive,
+                                elapsedSec = viewModel.generationElapsedSec,
+                                etaSec = viewModel.generationEtaSec,
                                 modifier = Modifier
                                     .animateItem(fadeInSpec = null, fadeOutSpec = null)
                                     .padding(top = 6.dp, bottom = 8.dp)
@@ -441,9 +494,9 @@ fun ChatScreen(
             label = "send_content"
         )
         Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = RoundedCornerShape(24.dp),
-            shadowElevation = 1.dp,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = RoundedCornerShape(32.dp),
+            shadowElevation = 0.dp,
             border = androidx.compose.foundation.BorderStroke(
                 1.dp,
                 MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
@@ -488,10 +541,10 @@ fun ChatScreen(
                         IconButton(
                             onClick = { showPlusMenu = true },
                             colors = IconButtonDefaults.iconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                             ),
-                            modifier = Modifier.pressScale(0.88f).size(40.dp).clip(CircleShape)
+                            modifier = Modifier.pressScale(0.88f).size(44.dp).clip(CircleShape)
                         ) {
                             Icon(
                                 Icons.Default.Add,
@@ -504,8 +557,18 @@ fun ChatScreen(
                         DropdownMenu(
                             expanded = showPlusMenu,
                             onDismissRequest = { showPlusMenu = false },
-                            shape = RoundedCornerShape(20.dp)
+                            shape = RoundedCornerShape(24.dp)
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Фото") },
+                                leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                                onClick = {
+                                    showPlusMenu = false
+                                    pickPhotoLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Прикрепить файл") },
                                 leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
@@ -514,6 +577,87 @@ fun ChatScreen(
                                     openDocumentLauncher.launch(arrayOf("*/*"))
                                 }
                             )
+                            DropdownMenuItem(
+                                text = { Text("Сгенерировать изображение") },
+                                leadingIcon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+                                onClick = {
+                                    showPlusMenu = false
+                                    if (inputText.isBlank()) inputText = "Нарисуй "
+                                    else if (!inputText.lowercase().contains("нарисуй") &&
+                                        !inputText.lowercase().contains("сгенерируй")
+                                    ) {
+                                        inputText = "Нарисуй: $inputText"
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    // Режим мышления (как «Fast» в Claude): как глубоко думает ИИ
+                    var showThinkingMenu by remember { mutableStateOf(false) }
+                    val level = thinkingLevels.firstOrNull { it.id == viewModel.thinkingLevel } ?: thinkingLevels[1]
+                    Box(Modifier.padding(start = 6.dp)) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier
+                                .pressScale(0.94f)
+                                .clip(RoundedCornerShape(50))
+                                .clickable { showThinkingMenu = true }
+                        ) {
+                            Row(
+                                Modifier.padding(start = 10.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(level.icon, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Text(
+                                    level.title,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(start = 6.dp)
+                                )
+                                Icon(
+                                    Icons.Default.ExpandMore,
+                                    contentDescription = "Режим мышления",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = showThinkingMenu,
+                            onDismissRequest = { showThinkingMenu = false },
+                            shape = RoundedCornerShape(24.dp)
+                        ) {
+                            thinkingLevels.forEach { item ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(item.title, fontWeight = FontWeight.SemiBold)
+                                            Text(
+                                                item.subtitle,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    leadingIcon = { Icon(item.icon, contentDescription = null) },
+                                    trailingIcon = {
+                                        if (item.id == viewModel.thinkingLevel) {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setThinkingLevel(item.id)
+                                        showThinkingMenu = false
+                                    }
+                                )
+                            }
                         }
                     }
 
@@ -522,9 +666,9 @@ fun ChatScreen(
                         color = if (viewModel.workingFolderName != null)
                             MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
                         else Color.Transparent,
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(22.dp),
                         modifier = Modifier
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(22.dp))
                             .clickable { showFolderDialog = true }
                     ) {
                         Row(
@@ -537,15 +681,17 @@ fun ChatScreen(
                                 modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Text(
-                                viewModel.workingFolderName ?: "Папка",
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .padding(start = 6.dp)
-                                    .widthIn(max = 130.dp)
-                            )
+                            viewModel.workingFolderName?.let { folderName ->
+                                Text(
+                                    folderName,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .padding(start = 6.dp)
+                                        .widthIn(max = 90.dp)
+                                )
+                            }
                         }
                     }
 
@@ -580,7 +726,7 @@ fun ChatScreen(
                                 scaleY = sendScale
                             }
                             .pressScale(0.86f)
-                            .size(44.dp),
+                            .size(48.dp),
                         shape = CircleShape
                     ) {
                         AnimatedContent(
@@ -805,7 +951,7 @@ private fun EmptyChatState(onSuggestion: (String) -> Unit) {
                 rowItems.forEachIndexed { colIndex, (label, prompt) ->
                     Surface(
                         onClick = { onSuggestion(prompt) },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(14.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
                         border = androidx.compose.foundation.BorderStroke(
                             1.dp,
@@ -842,14 +988,14 @@ private fun MessageBubble(
     ) {
         Surface(
             shape = RoundedCornerShape(
-                topStart = 22.dp, topEnd = 22.dp,
-                bottomStart = if (isUser) 22.dp else 8.dp,
-                bottomEnd = if (isUser) 8.dp else 22.dp
+                topStart = 26.dp, topEnd = 26.dp,
+                bottomStart = if (isUser) 26.dp else 8.dp,
+                bottomEnd = if (isUser) 8.dp else 26.dp
             ),
-            color = if (isUser) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.78f)
-            else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.92f),
-            tonalElevation = if (isUser) 0.dp else 1.dp,
-            shadowElevation = if (isUser) 0.dp else 3.dp,
+            color = if (isUser) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
+            else MaterialTheme.colorScheme.surfaceContainerLow,
+            tonalElevation = if (isUser) 0.dp else 2.dp,
+            shadowElevation = if (isUser) 0.dp else 1.dp,
             modifier = Modifier
                 .widthIn(max = 360.dp)
                 .padding(horizontal = if (isUser) 0.dp else 2.dp)
@@ -880,6 +1026,10 @@ private fun MessageBubble(
                 if (message.attachments.isNotEmpty()) {
                     Spacer(Modifier.height(10.dp))
                     message.attachments.forEach { file ->
+                        if (file.isImage) {
+                            MessageImage(file)
+                            Spacer(Modifier.height(6.dp))
+                        }
                         FileChip(file = file, onClick = { if (file.isSavedByAi) onSaveFileClick(file) })
                         Spacer(Modifier.height(6.dp))
                     }
@@ -889,11 +1039,41 @@ private fun MessageBubble(
     }
 }
 
+
+@Composable
+private fun MessageImage(file: AttachedFile) {
+    val context = LocalContext.current
+    val bitmap = remember(file.id, file.localPath, file.uri) {
+        runCatching {
+            val path = file.localPath
+            if (!path.isNullOrBlank()) {
+                BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = 2 })
+            } else {
+                val uri = file.uri ?: return@runCatching null
+                context.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = 2 })
+                }
+            }
+        }.getOrNull()
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = file.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 280.dp)
+                .clip(RoundedCornerShape(20.dp))
+        )
+    }
+}
+
 @Composable
 private fun FileChip(file: AttachedFile, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().pressScale(0.97f)
@@ -925,7 +1105,7 @@ private fun FileChip(file: AttachedFile, onClick: () -> Unit) {
 @Composable
 private fun PendingFileChip(file: AttachedFile, onRemove: () -> Unit) {
     Surface(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
     ) {
@@ -953,6 +1133,8 @@ private fun GenerationActivity(
     activities: List<String>,
     reasoning: String = "",
     reasoningLive: Boolean = false,
+    elapsedSec: Int = 0,
+    etaSec: Int? = null,
     modifier: Modifier = Modifier
 ) {
     val infinite = rememberInfiniteTransition(label = "activity")
@@ -984,16 +1166,33 @@ private fun GenerationActivity(
                     trackColor = MaterialTheme.colorScheme.surfaceVariant
                 )
             }
-            Text(
-                when {
-                    reasoningLive || reasoning.isNotBlank() -> "Думает…"
-                    activities.any { it.contains("выполняется") } -> "Выполняет инструменты…"
-                    else -> "Работаю над запросом"
-                },
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold
-            )
+            Column(Modifier.weight(1f, fill = false)) {
+                Text(
+                    when {
+                        reasoningLive || reasoning.isNotBlank() -> "Думает…"
+                        activities.any { it.contains("выполняется") } -> "Выполняет инструменты…"
+                        else -> "Работаю над запросом"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold
+                )
+                val timeLine = buildString {
+                    append("прошло ")
+                    append(elapsedSec)
+                    append(" с")
+                    if (etaSec != null && etaSec > 0) {
+                        append(" · ещё ~")
+                        append(etaSec)
+                        append(" с")
+                    }
+                }
+                Text(
+                    timeLine,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         // Блок рассуждений — как Thoughts в Margy: можно раскрыть и читать
@@ -1001,7 +1200,7 @@ private fun GenerationActivity(
             Column {
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(14.dp))
                         .clickable { reasoningOpen = !reasoningOpen }
                         .padding(vertical = 6.dp, horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -1054,7 +1253,7 @@ private fun GenerationActivity(
 
         // Текущий статус
         Surface(
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             border = androidx.compose.foundation.BorderStroke(
                 1.dp,
@@ -1074,20 +1273,27 @@ private fun GenerationActivity(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(17.dp)
                 )
-                Text(
-                    status.ifBlank { "Подключаюсь…" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Сейчас",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                    )
+                    Text(
+                        status.ifBlank { "Подключаюсь…" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
         // Инструменты — по строке, с id если есть
-        activities.takeLast(8).forEach { activity ->
+        activities.takeLast(3).forEach { activity ->
             val isError = activity.contains("ошибка", ignoreCase = true)
             val isDone = activity.contains("завершено", ignoreCase = true)
             Surface(
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
@@ -1132,7 +1338,7 @@ private fun GenerationActivity(
         }
         if (activities.isNotEmpty() || reasoning.isNotBlank()) {
             Text(
-                "Рассуждения и действия OpenCode в реальном времени",
+                "Текущие действия",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
             )
@@ -1188,3 +1394,19 @@ private fun formatSize(bytes: Long): String = when {
     bytes < 1024 * 1024 -> "${bytes / 1024} KB"
     else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
 }
+
+
+private data class ThinkingLevel(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
+)
+
+private val thinkingLevels = listOf(
+    ThinkingLevel("fast", "Быстрый", "Короткие ответы без раздумий", Icons.Outlined.Bolt),
+    ThinkingLevel("normal", "Нормальный", "Обычный режим", Icons.Outlined.Speed),
+    ThinkingLevel("medium", "Средний", "Немного подумает перед ответом", Icons.Outlined.Lightbulb),
+    ThinkingLevel("high", "Высокий", "Тщательный разбор по шагам", Icons.Outlined.Psychology),
+    ThinkingLevel("extreme", "Экстремальный", "Максимально глубокий анализ", Icons.Outlined.AutoAwesome)
+)

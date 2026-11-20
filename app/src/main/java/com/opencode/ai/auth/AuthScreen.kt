@@ -194,9 +194,18 @@ fun AuthScreen(onAuthenticated: (AuthSession) -> Unit, auth: AuthManager) {
                             )
                             val deadline = System.currentTimeMillis() + LOGIN_TIMEOUT_MS
                             var session: AuthSession? = null
+                            var serverErrors = 0
                             while (session == null && System.currentTimeMillis() < deadline) {
                                 delay(2000)
-                                session = auth.pollTelegramLogin(login.token)
+                                try {
+                                    session = auth.pollTelegramLogin(login.token)
+                                    serverErrors = 0
+                                } catch (e: AuthHttpException) {
+                                    // Временный сбой сервера (холодный старт функции и т.п.): запрос на сервере
+                                    // сохраняется, поэтому пробуем ещё. Подряд 5 ошибок — показываем её.
+                                    if (e.code in 500..599 && ++serverErrors < 5) continue
+                                    throw e
+                                }
                             }
                             if (session != null) onAuthenticated(session)
                             else message = "Время ожидания вышло. Попробуйте ещё раз."
@@ -211,16 +220,18 @@ fun AuthScreen(onAuthenticated: (AuthSession) -> Unit, auth: AuthManager) {
                     }
                 },
                 enabled = !busy,
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(50),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = SoftWhite,
+                    containerColor = androidx.compose.ui.graphics.lerp(
+                        SoftWhite, MaterialTheme.colorScheme.primaryContainer, 0.5f
+                    ),
                     contentColor = ScreenBg,
                     disabledContainerColor = SoftWhite.copy(alpha = 0.55f),
                     disabledContentColor = ScreenBg.copy(alpha = 0.7f)
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp)
+                    .height(58.dp)
             ) {
                 if (busy && !waiting) {
                     CircularProgressIndicator(

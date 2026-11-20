@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.geometry.Offset
 import com.opencode.ai.ui.theme.floating
 import com.opencode.ai.ui.theme.pressScale
+import com.opencode.ai.ui.theme.rememberMorphShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -77,8 +78,10 @@ fun AppDrawer(
         modifier = Modifier
             .fillMaxHeight()
             .width(300.dp),
+        // Android 17: у шторки скруглены внешние углы (28dp), поверхность тонируется обоями.
+        shape = RoundedCornerShape(topEnd = 32.dp, bottomEnd = 32.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 2.dp
+        tonalElevation = 3.dp
     ) {
         Column(
             modifier = Modifier
@@ -88,7 +91,7 @@ fun AppDrawer(
         ) {
             // Brand panel
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(32.dp),
                 color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -108,8 +111,8 @@ fun AppDrawer(
                     Box(
                         modifier = Modifier
                             .floating(amplitude = 3.dp, periodMs = 2600)
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(18.dp))
+                            .size(52.dp)
+                            .clip(rememberMorphShape())
                             .background(
                                 Brush.linearGradient(
                                     colors = listOf(
@@ -240,29 +243,29 @@ private fun DrawerItem(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
             .pressScale(0.96f)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(28.dp))
             .clickable(onClick = onClick)
             .background(
-                if (highlighted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                if (highlighted) MaterialTheme.colorScheme.secondaryContainer
                 else androidx.compose.ui.graphics.Color.Transparent
             )
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             icon,
             contentDescription = null,
             modifier = Modifier.size(22.dp),
-            tint = if (highlighted) MaterialTheme.colorScheme.primary
+            tint = if (highlighted) MaterialTheme.colorScheme.onSecondaryContainer
             else MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.width(16.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.bodyLarge,
-            color = if (highlighted) MaterialTheme.colorScheme.onSurface
+            color = if (highlighted) MaterialTheme.colorScheme.onSecondaryContainer
             else MaterialTheme.colorScheme.onSurface,
-            fontWeight = if (highlighted) FontWeight.Medium else FontWeight.Normal
+            fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Normal
         )
     }
 }
@@ -280,8 +283,8 @@ private fun SessionItem(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp)
             .pressScale(0.97f)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(28.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(horizontal = 18.dp, vertical = 12.dp)
     )
 }

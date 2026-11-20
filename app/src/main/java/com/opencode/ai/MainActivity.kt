@@ -31,25 +31,36 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         requestNotificationPermission()
         setContent {
-            YouCodeTheme {
-                val context = LocalContext.current
-                val auth = remember { AuthManager(context.applicationContext) }
-                var session by remember { mutableStateOf(auth.currentSession()) }
-                // Обновляем токены при запуске; если сессию отклонили — вернёмся на экран входа.
-                LaunchedEffect(Unit) {
-                    if (session != null) session = auth.refreshSession()
-                }
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    if (session == null) {
+            val context = LocalContext.current
+            val auth = remember { AuthManager(context.applicationContext) }
+            var session by remember { mutableStateOf(auth.currentSession()) }
+            LaunchedEffect(Unit) {
+                if (session != null) session = auth.refreshSession()
+            }
+            val uiPrefs = remember {
+                context.getSharedPreferences("youcode_ui", android.content.Context.MODE_PRIVATE)
+            }
+            val loggedOutTheme = uiPrefs.getString("theme", "system") ?: "system"
+            val loggedOutDynamic = uiPrefs.getBoolean("dynamic", true)
+
+            if (session == null) {
+                YouCodeTheme(themeMode = loggedOutTheme, dynamicColor = loggedOutDynamic) {
+                    Surface(modifier = Modifier.fillMaxSize()) {
                         AuthScreen(auth = auth, onAuthenticated = { session = it })
-                    } else {
-                        val viewModel: ChatViewModel = viewModel()
+                    }
+                }
+            } else {
+                val viewModel: ChatViewModel = viewModel()
+                YouCodeTheme(
+                    themeMode = viewModel.themeMode,
+                    dynamicColor = viewModel.dynamicColor
+                ) {
+                    Surface(modifier = Modifier.fillMaxSize()) {
                         MainScreen(
                             viewModel = viewModel,
                             onSignOut = {
                                 viewModel.wipeLocalData()
                                 auth.signOut()
-                                // Сбрасываем ViewModel: останавливается движок и сервис, у нового аккаунта чистое состояние.
                                 this@MainActivity.viewModelStore.clear()
                                 session = null
                             }

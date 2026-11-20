@@ -169,9 +169,3 @@ See `SUPABASE_SETUP.md` and run `supabase/setup.sql` in the Supabase SQL Editor.
 В версии 1.3.5 добавлены экраны входа и регистрации через Supabase Auth. Перед сборкой APK откройте Supabase → Authentication → Providers → Email и включите Email provider. Если включено подтверждение почты, после регистрации пользователь должен перейти по ссылке из письма и затем войти в приложение.
 
 В приложении токены сессии сохраняются в зашифрованном виде с использованием Android Keystore. Публичный publishable key используется на клиенте; секретный service_role ключ в приложение добавлять нельзя.
-
-## Лицензия
-
-YouCode распространяется под лицензией **GNU General Public License v3.0** — полный текст в файле [`LICENSE`](LICENSE).
-
-Пакет приложения: `ytk.youcode.dev`.

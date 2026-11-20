@@ -17,11 +17,16 @@ data class AttachedFile(
     val id: String,
     val name: String,
     val uri: Uri? = null,
+    /** Абсолютный путь на диске (сгенерированные картинки, копии фото). */
+    val localPath: String? = null,
     val mimeType: String = "text/plain",
     val sizeBytes: Long = 0,
     val contentPreview: String = "",
     val isSavedByAi: Boolean = false
-)
+) {
+    val isImage: Boolean get() = mimeType.startsWith("image/") ||
+        name.lowercase().let { it.endsWith(".png") || it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".webp") }
+}
 
 data class ChatMessage(
     val id: String,
@@ -77,19 +82,19 @@ object SampleData {
             "auto", "Авто", "",
             "Сам выбирает модель под задачу",
             emptyList(),
-            "Ты универсальный помощник. Подстраивайся под задачу."
+            "Ты сильный универсальный помощник. Думай ясно, отвечай точно, предлагай следующий шаг. Без воды."
         ),
         SmartMode(
             "code", "Программирование", "",
             "Лучшие модели для кода. При лимите — следующая",
             emptyList(),
-            "Ты senior-разработчик. Пиши чистый код, объясняй кратко, предлагай лучшие практики."
+            "Ты senior-разработчик. Пиши рабочий код сразу, объясняй коротко, лови баги, не раздувай проект без нужды."
         ),
         SmartMode(
             "study", "Учёба", "",
             "Объяснения, конспекты, подготовка к экзаменам",
             emptyList(),
-            "Ты терпеливый преподаватель. Объясняй просто, с примерами, проверяй понимание."
+            "Ты сильный репетитор. Объясняй просто и по шагам, с примерами. Не обсуждай с посторонними историю чата владельца."
         ),
         SmartMode(
             "design", "Дизайн", "",

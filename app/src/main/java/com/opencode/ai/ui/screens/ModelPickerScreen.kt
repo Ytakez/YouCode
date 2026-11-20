@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -68,14 +69,14 @@ fun ModelPickerScreen(
                 .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад",
-                    tint = MaterialTheme.colorScheme.onSurface)
+            FilledTonalIconButton(onClick = onBack, modifier = Modifier.padding(start = 8.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
             }
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = "Выберите модель",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f)
             )
@@ -87,7 +88,7 @@ fun ModelPickerScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(32.dp)),
+                .clip(RoundedCornerShape(50)),
             placeholder = {
                 Text("Поиск моделей", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f))
             },
@@ -103,7 +104,7 @@ fun ModelPickerScreen(
                 cursorColor = MaterialTheme.colorScheme.primary
             ),
             singleLine = true,
-            shape = RoundedCornerShape(32.dp)
+            shape = RoundedCornerShape(50)
         )
 
         Text(
@@ -162,13 +163,13 @@ fun ModelPickerScreen(
 @Composable
 private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val container by animateColorAsState(
-        targetValue = if (isSelected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer,
+        targetValue = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
         animationSpec = spring(stiffness = 400f),
         label = "model_item_color"
     )
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(28.dp),
         color = container,
         modifier = modifier
             .fillMaxWidth()
@@ -177,7 +178,7 @@ private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit, 
                 if (isSelected) Modifier.border(
                     1.5.dp,
                     MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
-                    RoundedCornerShape(24.dp)
+                    RoundedCornerShape(28.dp)
                 ) else Modifier
             )
     ) {
@@ -205,7 +206,7 @@ private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit, 
                 )
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
                         Text(
                             text = model.contextSize,
                             style = MaterialTheme.typography.labelSmall,
@@ -214,7 +215,7 @@ private fun ModelItem(model: AiModel, isSelected: Boolean, onClick: () -> Unit, 
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.primaryContainer) {
                         Text(
                             text = if (model.isFree) "бесплатно" else model.provider,
                             style = MaterialTheme.typography.labelSmall,

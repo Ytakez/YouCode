@@ -51,16 +51,36 @@ class Engine(private val context: Context) {
     var beforeStart: () -> Unit = {}
 
     /** Linux-подобное окружение для opencode и всего, что он запускает. */
-    fun baseEnv(): Map<String, String> = mapOf(
-        "HOME" to home.absolutePath,
-        "XDG_CONFIG_HOME" to File(home, ".config").absolutePath,
-        "XDG_DATA_HOME" to File(home, ".local/share").absolutePath,
-        "XDG_STATE_HOME" to File(home, ".local/state").absolutePath,
-        "XDG_CACHE_HOME" to File(home, ".cache").absolutePath,
-        "TMPDIR" to tmp.absolutePath,
-        "SHELL" to "/system/bin/sh",
-        "PATH" to (System.getenv("PATH") ?: "/system/bin"),
-    )
+    fun baseEnv(): Map<String, String> {
+        val systemPath = System.getenv("PATH") ?: "/system/bin:/system/xbin"
+        val path = listOf(
+            systemPath,
+            "/data/local/tmp",
+            File(home, ".local/bin").absolutePath,
+            File(workspace, "bin").absolutePath,
+            "/system/bin",
+            "/system/xbin",
+            "/vendor/bin"
+        ).joinToString(":")
+        return mapOf(
+            "HOME" to home.absolutePath,
+            "XDG_CONFIG_HOME" to File(home, ".config").absolutePath,
+            "XDG_DATA_HOME" to File(home, ".local/share").absolutePath,
+            "XDG_STATE_HOME" to File(home, ".local/state").absolutePath,
+            "XDG_CACHE_HOME" to File(home, ".cache").absolutePath,
+            "TMPDIR" to tmp.absolutePath,
+            "SHELL" to "/system/bin/sh",
+            "PATH" to path,
+            // Сеть без прокси-ограничений из окружения системы
+            "NO_PROXY" to "*",
+            "no_proxy" to "*",
+            "CURL_CA_BUNDLE" to "",
+            "SSL_CERT_FILE" to "",
+            // Разрешаем node/bun/npm кэши в home приложения
+            "npm_config_cache" to File(home, ".npm").absolutePath,
+            "BUN_INSTALL" to File(home, ".bun").absolutePath,
+        )
+    }
 
     suspend fun start() = withContext(Dispatchers.IO) {
         if (running) return@withContext
@@ -121,6 +141,33 @@ class Engine(private val context: Context) {
     fun stop() {
         val p = process ?: return
         process = null
+        terminate(p)
+    }
+
+    /** То же, что stop(), но ожидание в отдельном потоке: безопасно вызывать с главного потока. */
+    fun stopAsync() {
+        val p = process ?: return
+        process = null
+        Thread({ terminate(p) }, "opencode-stop").start()
+    }
+
+    /**
+     * Выход из аккаунта: процесс убивается сразу (SIGKILL), а папки пользователя уходят в корзину
+     * переименованием (мгновенно) и удаляются в фоне. Так следующий вход не гонится с удалением.
+     */
+    fun wipeData() {
+        process?.let { p -> process = null; runCatching { p.destroyForcibly(); p.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS) } }
+        val trash = File(context.filesDir, ".trash-${System.currentTimeMillis()}").apply { mkdirs() }
+        for (d in listOf(home, workspace, tmp)) {
+            if (d.exists() && !d.renameTo(File(trash, d.name))) d.deleteRecursively()
+        }
+        runCatching { log.delete() }
+        Thread({
+            context.filesDir.listFiles { f -> f.name.startsWith(".trash-") }?.forEach { it.deleteRecursively() }
+        }, "opencode-wipe").start()
+    }
+
+    private fun terminate(p: Process) {
         p.destroy()
         // Если за 1.5 с не умер — жёстко (как надёжный cleanup в Margy-подходе)
         try {
