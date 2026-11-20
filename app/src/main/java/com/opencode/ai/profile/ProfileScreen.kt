@@ -221,6 +221,22 @@ fun ProfileScreen(store: ProfileStore, onBack: () -> Unit) {
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             )
+            // Раньше из режима «не называть по имени» нельзя было вернуться к обращению по имени: поле уже пустое, менять нечего.
+            if (profile.callName == "") {
+                androidx.compose.material3.TextButton(
+                    enabled = !saving,
+                    onClick = {
+                        scope.launch {
+                            saving = true
+                            message = null
+                            runCatching { store.update(clearCallName = true) }
+                                .onSuccess { isError = false; message = "ИИ снова зовёт вас по имени" }
+                                .onFailure { isError = true; message = it.message ?: "Не удалось сохранить" }
+                            saving = false
+                        }
+                    }
+                ) { Text("Звать меня по имени") }
+            }
 
             val tgName = profile.username.takeIf { it.isNotBlank() && !Regex("^tg\\d+$").matches(it) }
             if (tgName != null) {

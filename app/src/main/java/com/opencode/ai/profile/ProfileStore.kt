@@ -194,9 +194,29 @@ class ProfileStore(
         val bmp = resolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
         } ?: throw IllegalStateException("Не удалось открыть изображение")
-        val side = minOf(bmp.width, bmp.height)
-        val square = Bitmap.createBitmap(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side)
-        val out = Bitmap.createScaledBitmap(square, 512, 512, true)
+        // Фото с камеры хранятся «лёжа» с пометкой поворота в EXIF: без неё аватарка получалась повёрнутой.
+        val degrees = runCatching {
+            resolver.openInputStream(uri)?.use { stream ->
+                when (android.media.ExifInterface(stream).getAttributeInt(
+                    android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL
+                )) {
+                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                    else -> 0f
+                }
+            } ?: 0f
+        }.getOrDefault(0f)
+        val upright = if (degrees == 0f) bmp else Bitmap.createBitmap(
+            bmp, 0, 0, bmp.width, bmp.height, android.graphics.Matrix().apply { postRotate(degrees) }, true
+        )
+        val side = minOf(upright.width, upright.height)
+        val square = Bitmap.createBitmap(upright, (upright.width - side) / 2, (upright.height - side) / 2, side, side)
+        val scaled = Bitmap.createScaledBitmap(square, 512, 512, true)
+        // JPEG не умеет прозрачность: подкладываем белый фон, иначе PNG с прозрачным фоном становится чёрным.
+        val out = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888).also {
+            android.graphics.Canvas(it).apply { drawColor(android.graphics.Color.WHITE); drawBitmap(scaled, 0f, 0f, null) }
+        }
         return ByteArrayOutputStream().also { out.compress(Bitmap.CompressFormat.JPEG, 88, it) }.toByteArray()
     }
 }

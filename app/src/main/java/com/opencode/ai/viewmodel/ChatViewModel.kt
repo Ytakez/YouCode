@@ -1372,7 +1372,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val keys = listOf(
             "списывал", "списыва", "спишет", "что он писал", "что она писала",
             "покажи историю", "что писал", "что спрашивал", "разоблач",
-            "учитель", "препод", "забрал телефон", "это ученик",
+            "забрал телефон", "это ученик", "учитель смотрит", "препод смотрит",
             "was he cheating", "did he cheat", "show history", "what did he ask",
             "what was he", "previous messages", "история чата", "перескажи диалог"
         )
@@ -1427,15 +1427,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
 
+    private val imageRequestRegex = Regex(
+        "(?i)(" +
+            "нарисуй|нарисуйте|" +
+            "(сгенерируй|сгенерируйте|создай|создайте|сделай|сделайте)\\s+(мне\\s+)?(новую\\s+)?(картинк|изображени|фото|иллюстраци|логотип|аватар|обои)|" +
+            "generate\\s+(me\\s+)?(an?\\s+)?(image|picture|photo|illustration|logo)|" +
+            "make\\s+(me\\s+)?(an?\\s+)?(image|picture)|" +
+            "draw\\s+(me|an?\\s+(picture|image|illustration|cat|dog))|" +
+            "изображение:" +
+            ")"
+    )
+
+    /** Только явная просьба нарисовать: раньше «сгенерируй пароль» или «опиши картинку» запускали генерацию изображения. */
     private fun isImageGenerationRequest(text: String): Boolean {
-        val t = text.lowercase().trim()
+        val t = text.trim()
         if (t.isBlank()) return false
-        val keys = listOf(
-            "нарисуй", "нарисуйте", "сгенерируй", "сгенерируй картин", "сгенерируй изображ",
-            "создай картин", "создай изображ", "создай фото", "generate image", "generate a picture",
-            "draw me", "draw a ", "make an image", "картинку", "изображение:"
-        )
-        return keys.any { it in t }
+        return imageRequestRegex.containsMatchIn(t)
     }
 
     private fun imagePromptFrom(text: String): String {
@@ -1679,6 +1686,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 var collected = ""
                 var unchanged = 0
                 var emptyPolls = 0
+                var settled = 0
                 while (System.currentTimeMillis() < deadline) {
                     // Пока человек выбирает ответ на вопрос ИИ, «завис» не считаем: сбрасываем счётчики ожидания.
                     if (pendingQuestion != null) {
@@ -1704,11 +1712,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             unchanged++
                         }
-                        // time.completed приходит не во всех версиях: тогда считаем ответ
-                        // готовым, когда текст перестал меняться примерно на 18 секунд.
-                        if (assistantMessagesCompleted(listing) ||
-                            (unchanged >= 12 && !assistantMessagesExposeCompletion(listing))
-                        ) break
+                        // Агент ещё работает (идёт инструмент или модель ждёт результата шага) —
+                        // не завершаем, даже если текст долго не менялся (сборка, установка и т.п.).
+                        if (assistantWorkInProgress(listing)) {
+                            unchanged = 0
+                            settled = 0
+                        } else if (assistantMessagesCompleted(listing)) {
+                            // Между шагами агента на миг все сообщения выглядят завершёнными:
+                            // ждём два опроса подряд, чтобы не обрезать ответ на полпути.
+                            if (++settled >= 2) break
+                        } else {
+                            settled = 0
+                            // time.completed приходит не во всех версиях: тогда считаем ответ
+                            // готовым, когда текст перестал меняться примерно на 18 секунд.
+                            if (unchanged >= 12 && !assistantMessagesExposeCompletion(listing)) break
+                        }
                     } else {
                         // Сообщений ассистента ещё нет: модель могла не запуститься вовсе.
                         if (sessionHasAssistantMessage(listing)) {
@@ -1804,6 +1822,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (completed <= 0L) return false
         }
         return sawAssistant
+    }
+
+    /** true, если последнее сообщение ассистента ещё не закончено: идёт инструмент или шаг завершился вызовом инструментов. */
+    private fun assistantWorkInProgress(payload: JSONObject): Boolean {
+        val messages = payload.optJSONArray("data") ?: return false
+        for (i in messages.length() - 1 downTo 0) {
+            val message = messages.optJSONObject(i) ?: continue
+            if (!isAssistantMessage(message)) continue
+            val finish = message.optString("finish")
+            if (finish == "tool-calls" || finish == "tool_calls" || finish == "tool_use") return true
+            val parts = message.optJSONArray("content") ?: message.optJSONArray("parts") ?: return false
+            for (j in 0 until parts.length()) {
+                val part = parts.optJSONObject(j) ?: continue
+                if (part.optString("type") != "tool") continue
+                val status = part.optJSONObject("state")?.optString("status").orEmpty()
+                    .ifBlank { part.optString("status") }
+                if (status == "running" || status == "pending") return true
+            }
+            return false
+        }
+        return false
     }
 
     /** true, если сервер вообще сообщает о завершении шага (иначе ждём по «текст перестал меняться»). */

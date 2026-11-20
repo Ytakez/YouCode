@@ -254,21 +254,29 @@ val openTreeLauncher = rememberLauncherForActivityResult(
         viewModel.setWorkingFolder(uri, name, files)
     }
 
+    // Какой файл человек нажал: раньше сохранялся «последний файл в чате», а у картинок — текст-описание вместо самой картинки.
+    var fileToSave by remember { mutableStateOf<AttachedFile?>(null) }
     val createDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/plain")
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri: Uri? ->
-        uri ?: return@rememberLauncherForActivityResult
-        val lastSaved = viewModel.messages
-            .asReversed()
-            .flatMap { it.attachments }
-            .firstOrNull { it.isSavedByAi }
-
-        if (lastSaved != null) {
-            try {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    out.write(lastSaved.contentPreview.toByteArray())
-                }
-            } catch (_: Exception) { }
+        val file = fileToSave
+        fileToSave = null
+        if (uri == null || file == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val source = file.localPath?.let { java.io.File(it) }?.takeIf { it.isFile }
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        if (source != null) source.inputStream().use { it.copyTo(out) }
+                        else out.write(file.contentPreview.toByteArray(Charsets.UTF_8))
+                    } != null
+                }.getOrDefault(false)
+            }
+            android.widget.Toast.makeText(
+                context,
+                if (ok) "Файл сохранён" else "Не удалось сохранить файл",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -413,7 +421,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                                     fromX = if (msg.isUser) 40.dp else (-40).dp,
                                     fromY = 18.dp
                                 ),
-                            onSaveFileClick = { file -> createDocumentLauncher.launch(file.name) }
+                            onSaveFileClick = { file -> fileToSave = file; createDocumentLauncher.launch(file.name) }
                         )
                     }
                     if (viewModel.isGenerating) {
@@ -1016,13 +1024,15 @@ private fun MessageBubble(
                     Spacer(Modifier.height(4.dp))
                 }
 
-                Text(
-                    message.content,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer
-                    else MaterialTheme.colorScheme.onSurface,
-                    lineHeight = 22.sp
-                )
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(
+                        message.content,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSurface,
+                        lineHeight = 22.sp
+                    )
+                }
 
                 if (message.attachments.isNotEmpty()) {
                     Spacer(Modifier.height(10.dp))
@@ -1041,25 +1051,44 @@ private fun MessageBubble(
 }
 
 
+private const val MAX_IMAGE_SIDE = 1280
+
+private fun sampleSizeFor(width: Int, height: Int): Int {
+    var sample = 1
+    while (width / (sample * 2) >= MAX_IMAGE_SIDE || height / (sample * 2) >= MAX_IMAGE_SIDE) sample *= 2
+    return sample
+}
+
+/** Читает картинку уменьшенной (не больше ~1280 px), чтобы большие фото не вешали интерфейс и не съедали память. */
+private fun decodeSampled(open: () -> java.io.InputStream?): android.graphics.Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    open()?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val opts = BitmapFactory.Options().apply { inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight) }
+    return open()?.use { BitmapFactory.decodeStream(it, null, opts) }
+}
+
 @Composable
 private fun MessageImage(file: AttachedFile) {
     val context = LocalContext.current
-    val bitmap = remember(file.id, file.localPath, file.uri) {
-        runCatching {
-            val path = file.localPath
-            if (!path.isNullOrBlank()) {
-                BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = 2 })
-            } else {
-                val uri = file.uri ?: return@runCatching null
-                context.contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = 2 })
+    var bitmap by remember(file.id, file.localPath, file.uri) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(file.id, file.localPath, file.uri) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                val path = file.localPath
+                if (!path.isNullOrBlank()) {
+                    decodeSampled { java.io.File(path).takeIf { it.isFile }?.inputStream() }
+                } else {
+                    val uri = file.uri
+                    if (uri == null) null else decodeSampled { context.contentResolver.openInputStream(uri) }
                 }
-            }
-        }.getOrNull()
+            }.getOrNull()
+        }
     }
-    if (bitmap != null) {
+    val loaded = bitmap
+    if (loaded != null) {
         Image(
-            bitmap = bitmap.asImageBitmap(),
+            bitmap = loaded.asImageBitmap(),
             contentDescription = file.name,
             contentScale = ContentScale.Crop,
             modifier = Modifier

@@ -106,7 +106,12 @@ fun QuestionCard(
         else -> true
     }
 
-    val canSubmit = form.fields.all { valid(it, answerOf(it)) }
+    // Раньше нужно было ответить на ВСЕ поля, и одно пустое текстовое поле блокировало кнопку,
+    // даже когда человек уже выбрал «Да». Теперь: хотя бы один ответ, и каждый данный ответ корректен.
+    val canSubmit = run {
+        val given = form.fields.map { it to answerOf(it) }.filter { (_, a) -> a != null }
+        given.isNotEmpty() && given.all { (f, a) -> valid(f, a) }
+    }
 
     Surface(
         shape = RoundedCornerShape(28.dp),
