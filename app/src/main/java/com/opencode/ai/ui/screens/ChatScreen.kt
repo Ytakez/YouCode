@@ -86,6 +86,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Image as OutlinedImageIcon
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.filled.Check
@@ -561,7 +562,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                         ) {
                             DropdownMenuItem(
                                 text = { Text("Фото") },
-                                leadingIcon = { Icon(Icons.Outlined.Image, contentDescription = null) },
+                                leadingIcon = { Icon(Icons.Outlined.OutlinedImageIcon, contentDescription = null) },
                                 onClick = {
                                     showPlusMenu = false
                                     pickPhotoLauncher.launch(
