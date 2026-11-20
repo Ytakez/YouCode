@@ -128,7 +128,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignO
                             selected = viewModel.themeMode == id,
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.setThemeMode(id)
+                                viewModel.applyThemeMode(id)
                             },
                             shape = SegmentedButtonDefaults.itemShape(index, themeOptions.size),
                             modifier = Modifier.heightIn(min = 48.dp),
@@ -158,7 +158,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignO
                             }
                             Switch(
                                 checked = viewModel.dynamicColor,
-                                onCheckedChange = { viewModel.setDynamicColor(it) },
+                                onCheckedChange = { viewModel.applyDynamicColor(it) },
                                 thumbContent = if (viewModel.dynamicColor) {
                                     {
                                         Icon(

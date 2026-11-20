@@ -654,7 +654,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                                     },
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.setThinkingLevel(item.id)
+                                        viewModel.applyThinkingLevel(item.id)
                                         showThinkingMenu = false
                                     }
                                 )

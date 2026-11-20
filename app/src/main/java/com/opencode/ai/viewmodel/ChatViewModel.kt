@@ -83,7 +83,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var thinkingLevel by mutableStateOf(uiPrefs.getString("thinking", "normal") ?: "normal")
         private set
 
-    fun setThinkingLevel(level: String) {
+    fun applyThinkingLevel(level: String) {
         thinkingLevel = level
         uiPrefs.edit().putString("thinking", level).apply()
     }
@@ -947,12 +947,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Выход из аккаунта: стираем локальные чаты и настройки провайдеров, чтобы их не увидел следующий пользователь. */
 
-    fun setThemeMode(mode: String) {
+    fun applyThemeMode(mode: String) {
         themeMode = mode
         uiPrefs.edit().putString("theme", mode).apply()
     }
 
-    fun setDynamicColor(on: Boolean) {
+    fun applyDynamicColor(on: Boolean) {
         dynamicColor = on
         uiPrefs.edit().putBoolean("dynamic", on).apply()
     }
