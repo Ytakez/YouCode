@@ -43,16 +43,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.opencode.ai.profile.ProfileScreen
+import com.opencode.ai.profile.ProfileStore
 import com.opencode.ai.ui.components.AppDrawer
+import com.opencode.ai.ui.components.QuestionDialog
 import com.opencode.ai.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
 
 enum class Screen {
-    CHAT, PROVIDERS, SKILLS_MCP, SETTINGS
+    CHAT, PROVIDERS, SKILLS_MCP, SETTINGS, PROFILE
 }
 
 @Composable
-fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
+fun MainScreen(viewModel: ChatViewModel, profile: ProfileStore? = null, onSignOut: (() -> Unit)? = null) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var currentScreen by remember { mutableStateOf(Screen.CHAT) }
@@ -80,6 +83,16 @@ fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
         drawerState = drawerState,
         drawerContent = {
             AppDrawer(
+                profileName = profile?.profile?.displayName.orEmpty(),
+                profileSubtitle = profile?.profile?.username
+                    ?.takeIf { it.isNotBlank() && !Regex("^tg\\d+$").matches(it) }?.let { "@$it" } ?: "AI workspace",
+                avatarUrl = profile?.profile?.avatarUrl.orEmpty(),
+                onProfileClick = profile?.let {
+                    {
+                        scope.launch { drawerState.close() }
+                        currentScreen = Screen.PROFILE
+                    }
+                },
                 sessions = viewModel.sessions,
                 onNewChat = {
                     viewModel.newChat()
@@ -161,6 +174,7 @@ fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
                     )
                     Screen.SKILLS_MCP -> SkillsMcpScreen(onBack = { currentScreen = Screen.CHAT })
                     Screen.SETTINGS -> SettingsScreen(onBack = { currentScreen = Screen.CHAT }, viewModel = viewModel, onSignOut = onSignOut)
+                    Screen.PROFILE -> if (profile != null) ProfileScreen(store = profile, onBack = { currentScreen = Screen.CHAT })
                 }
             }
 
@@ -220,6 +234,17 @@ fun MainScreen(viewModel: ChatViewModel, onSignOut: (() -> Unit)? = null) {
                 }
             }
         }
+    }
+
+    // Вопрос от ИИ: карточка с вариантами ответа поверх чата
+    viewModel.pendingQuestion?.let { form ->
+        QuestionDialog(
+            form = form,
+            submitting = viewModel.questionSubmitting,
+            error = viewModel.questionError,
+            onSubmit = { viewModel.answerQuestion(it) },
+            onSkip = { viewModel.skipQuestion() }
+        )
     }
 
     if (showSignOutDialog) {

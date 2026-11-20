@@ -9,6 +9,7 @@ const newClient = () =>
   });
 const admin = newClient();
 const BOT_USERNAME = (Deno.env.get("TELEGRAM_BOT_USERNAME") ?? "").replace(/^@/, "");
+const BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
 const TTL_MS = 10 * 60 * 1000;
 // Потолок неподтверждённых запросов: защита таблицы от переполнения теми, у кого есть publishable key.
 const MAX_PENDING = 300;
@@ -20,6 +21,33 @@ const json = (body: unknown, status = 200) =>
 function randomToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(24));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Кладёт Telegram-аватарку в Storage и записывает в профиль, но только если своей аватарки у пользователя ещё нет.
+// Любая ошибка здесь не мешает входу.
+async function syncAvatar(userId: string, fileId: string | null) {
+  if (!fileId || !BOT_TOKEN) return;
+  try {
+    const { data: prof } = await admin.from("profiles").select("avatar_url").eq("id", userId).maybeSingle();
+    if (!prof || prof.avatar_url) return;
+    const f = await (await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_id: fileId }),
+    })).json();
+    const path = f?.result?.file_path;
+    if (!path) return;
+    const img = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${path}`);
+    if (!img.ok) return;
+    const bytes = new Uint8Array(await img.arrayBuffer());
+    const objectPath = `${userId}/avatar.jpg`;
+    const up = await admin.storage.from("avatars").upload(objectPath, bytes, { contentType: "image/jpeg", upsert: true });
+    if (up.error) return;
+    const { data: pub } = admin.storage.from("avatars").getPublicUrl(objectPath);
+    await admin.from("profiles").update({ avatar_url: `${pub.publicUrl}?v=${Date.now()}` }).eq("id", userId);
+  } catch (_) {
+    // аватарка необязательна
+  }
 }
 
 Deno.serve(async (req) => {
@@ -86,6 +114,7 @@ Deno.serve(async (req) => {
       const userId = session.user?.id ?? verified?.user?.id ?? "";
       const userEmail = session.user?.email ?? verified?.user?.email ?? email;
       if (!userId) return await fail("user", "session without user id");
+      await syncAvatar(userId, claimed.photo_file_id ?? null);
 
       return json({
         status: "ok",

@@ -169,7 +169,7 @@ class Engine(private val context: Context) {
 
     private fun terminate(p: Process) {
         p.destroy()
-        // Если за 1.5 с не умер — жёстко (как надёжный cleanup в Margy-подходе)
+        // Если за 1.5 с не умер — жёстко
         try {
             if (!p.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
                 p.destroyForcibly()

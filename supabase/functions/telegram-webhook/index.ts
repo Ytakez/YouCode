@@ -18,6 +18,29 @@ async function tg(method: string, payload: Record<string, unknown>) {
   });
 }
 
+// Как tg(), но возвращает ответ Telegram (нужно для getUserProfilePhotos).
+async function tgJson(method: string, payload: Record<string, unknown>) {
+  const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return await res.json().catch(() => null);
+}
+
+// file_id аватарки пользователя (до 640 px). Токен бота наружу не уходит: файл скачает telegram-auth.
+async function profilePhotoFileId(userId: number): Promise<string | null> {
+  try {
+    const r = await tgJson("getUserProfilePhotos", { user_id: userId, limit: 1 });
+    const sizes = r?.result?.photos?.[0];
+    if (!Array.isArray(sizes) || sizes.length === 0) return null;
+    const fit = sizes.filter((x: { width?: number }) => (x.width ?? 0) <= 640);
+    return String((fit.length ? fit[fit.length - 1] : sizes[0]).file_id);
+  } catch {
+    return null;
+  }
+}
+
 const ok = () => new Response("ok");
 
 Deno.serve(async (req) => {
@@ -55,8 +78,10 @@ Deno.serve(async (req) => {
   if (cb && typeof cb.data === "string" && cb.data.startsWith("ok:") && cb.message?.chat?.type === "private") {
     const token = cb.data.slice(3);
     if (!TOKEN_RE.test(token)) return ok();
+    const photoFileId = await profilePhotoFileId(cb.from.id);
     const { data } = await admin.from(TABLE)
       .update({
+        photo_file_id: photoFileId,
         telegram_id: cb.from.id,
         telegram_username: cb.from.username ?? null,
         first_name: cb.from.first_name ?? null,

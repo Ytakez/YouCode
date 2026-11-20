@@ -8,7 +8,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -17,6 +20,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.opencode.ai.auth.AuthManager
 import com.opencode.ai.auth.AuthScreen
+import com.opencode.ai.auth.AuthSession
+import com.opencode.ai.profile.OnboardingScreen
+import com.opencode.ai.profile.ProfileStatus
+import com.opencode.ai.profile.ProfileStore
 import com.opencode.ai.ui.screens.MainScreen
 import com.opencode.ai.ui.theme.YouCodeTheme
 import com.opencode.ai.viewmodel.ChatViewModel
@@ -43,7 +50,8 @@ class MainActivity : ComponentActivity() {
             val loggedOutTheme = uiPrefs.getString("theme", "system") ?: "system"
             val loggedOutDynamic = uiPrefs.getBoolean("dynamic", true)
 
-            if (session == null) {
+            val current: AuthSession? = session
+            if (current == null) {
                 YouCodeTheme(themeMode = loggedOutTheme, dynamicColor = loggedOutDynamic) {
                     Surface(modifier = Modifier.fillMaxSize()) {
                         AuthScreen(auth = auth, onAuthenticated = { session = it })
@@ -51,20 +59,37 @@ class MainActivity : ComponentActivity() {
                 }
             } else {
                 val viewModel: ChatViewModel = viewModel()
+                val profileStore = remember(current.userId) {
+                    ProfileStore(context.applicationContext, auth, current.userId)
+                }
+                LaunchedEffect(profileStore) { profileStore.refresh() }
+                // ИИ узнаёт, как обращаться к человеку (имя меняется в профиле и действует сразу)
+                LaunchedEffect(profileStore.profile.displayName, profileStore.profile.callName) {
+                    viewModel.setUserNames(profileStore.profile.displayName, profileStore.profile.callName)
+                }
                 YouCodeTheme(
                     themeMode = viewModel.themeMode,
                     dynamicColor = viewModel.dynamicColor
                 ) {
                     Surface(modifier = Modifier.fillMaxSize()) {
-                        MainScreen(
-                            viewModel = viewModel,
-                            onSignOut = {
-                                viewModel.wipeLocalData()
-                                auth.signOut()
-                                this@MainActivity.viewModelStore.clear()
-                                session = null
-                            }
-                        )
+                        when {
+                            profileStore.status == ProfileStatus.LOADING ->
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator()
+                                }
+                            profileStore.needsOnboarding -> OnboardingScreen(store = profileStore)
+                            else -> MainScreen(
+                                viewModel = viewModel,
+                                profile = profileStore,
+                                onSignOut = {
+                                    viewModel.wipeLocalData()
+                                    profileStore.clear()
+                                    auth.signOut()
+                                    this@MainActivity.viewModelStore.clear()
+                                    session = null
+                                }
+                            )
+                        }
                     }
                 }
             }

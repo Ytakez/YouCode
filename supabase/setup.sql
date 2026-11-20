@@ -94,3 +94,50 @@ revoke all on public.telegram_login_requests from anon, authenticated;
 -- No client insert/update policies for usage_events: only a trusted gateway may write usage.
 -- After the owner's first account registers, promote it manually:
 -- update public.profiles set role='admin' where id='YOUR-AUTH-USER-UUID';
+
+-- ===== YouCode 1.4: профиль (имя, обращение ИИ, аватарка) =====
+alter table public.profiles add column if not exists display_name text;
+alter table public.profiles add column if not exists call_name text;   -- null: звать по display_name; '': не называть по имени
+alter table public.profiles add column if not exists avatar_url text;
+alter table public.profiles add column if not exists onboarded boolean not null default false;
+alter table public.telegram_login_requests add column if not exists photo_file_id text;
+
+-- Клиент меняет профиль только через эту функцию (колонки остаются закрыты для прямого UPDATE).
+create or replace function public.update_my_profile(p_patch jsonb)
+returns public.profiles language plpgsql security definer set search_path = public as $$
+declare
+  r public.profiles;
+  av text;
+begin
+  if auth.uid() is null then raise exception 'not authenticated'; end if;
+  if p_patch ? 'avatar_url' then
+    av := nullif(p_patch->>'avatar_url', '');
+    if av is not null and (position('/storage/v1/object/public/avatars/' || auth.uid()::text || '/' in av) = 0 or length(av) > 400) then
+      raise exception 'bad avatar url';
+    end if;
+  end if;
+  update public.profiles set
+    display_name = case when p_patch ? 'display_name' then nullif(left(btrim(p_patch->>'display_name'), 40), '') else display_name end,
+    call_name    = case when p_patch ? 'call_name' then (case when p_patch->>'call_name' is null then null else left(btrim(p_patch->>'call_name'), 40) end) else call_name end,
+    avatar_url   = case when p_patch ? 'avatar_url' then av else avatar_url end,
+    onboarded    = case when p_patch ? 'onboarded' then (p_patch->>'onboarded')::boolean else onboarded end
+  where id = auth.uid()
+  returning * into r;
+  return r;
+end; $$;
+revoke all on function public.update_my_profile(jsonb) from public, anon;
+grant execute on function public.update_my_profile(jsonb) to authenticated;
+
+-- Аватарки: публичная корзина, писать можно только в свою папку <user_id>/
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('avatars', 'avatars', true, 2097152, array['image/jpeg','image/png','image/webp'])
+on conflict (id) do update set public = true, file_size_limit = 2097152, allowed_mime_types = array['image/jpeg','image/png','image/webp'];
+drop policy if exists "avatars read" on storage.objects;
+create policy "avatars read" on storage.objects for select to public using (bucket_id = 'avatars');
+drop policy if exists "avatars own insert" on storage.objects;
+create policy "avatars own insert" on storage.objects for insert to authenticated
+  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+drop policy if exists "avatars own update" on storage.objects;
+create policy "avatars own update" on storage.objects for update to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);

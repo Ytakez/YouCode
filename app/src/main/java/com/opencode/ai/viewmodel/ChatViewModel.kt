@@ -16,6 +16,9 @@ import com.opencode.ai.data.ChatSession
 import com.opencode.ai.data.SampleData
 import com.opencode.ai.engine.Engine
 import com.opencode.ai.engine.EngineService
+import com.opencode.ai.ui.components.QField
+import com.opencode.ai.ui.components.QOption
+import com.opencode.ai.ui.components.QuestionForm
 import kotlinx.coroutines.sync.withLock
 import com.opencode.ai.data.SmartMode
 import kotlinx.coroutines.Dispatchers
@@ -97,8 +100,180 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         else -> ""
     }
 
-    private fun withThinkingHint(prompt: String): String =
-        thinkingHint().let { if (it.isBlank()) prompt else "$it\n\n$prompt" }
+    private fun withThinkingHint(prompt: String): String {
+        val head = listOf(thinkingHint(), userContextBlock()).filter { it.isNotBlank() }.joinToString("\n\n")
+        return if (head.isBlank()) prompt else "$head\n\n$prompt"
+    }
+
+    // ---- Профиль: как ИИ обращается к человеку ----
+    private var userDisplayName = ""
+    private var userCallName: String? = null
+
+    /** [callName]: null — звать по имени из профиля; пусто — не называть по имени. */
+    fun setUserNames(displayName: String, callName: String?) {
+        userDisplayName = cleanName(displayName)
+        userCallName = callName?.let(::cleanName)
+    }
+
+    private fun cleanName(raw: String) = raw.replace(Regex("[\\r\\n]+"), " ").trim().take(40)
+
+    /** Каждый запрос уходит в новую сессию движка, поэтому имя и правило про вопросы передаём в каждом. */
+    private fun userContextBlock(): String = buildString {
+        val addressAs = userCallName ?: userDisplayName
+        when {
+            addressAs.isNotBlank() -> append("The user's name is \"$addressAs\". Address them by this name when it feels natural.\n")
+            userCallName == "" -> append("Do not address the user by name.\n")
+        }
+        append(
+            "Interaction rule: whenever you need to ask the user something (clarify a request, offer choices, " +
+                "confirm an action), ALWAYS call the `question` tool with 2-4 ready-made options instead of asking in plain text. " +
+                "The user sees a card with the options and a field for their own answer. Put the recommended option first. " +
+                "Ask in plain text only when the answer must be free-form and cannot be offered as options."
+        )
+    }
+
+    // ---- Вопросы ИИ: движок присылает форму (инструмент question), мы показываем карточку с вариантами ----
+    var pendingQuestion by mutableStateOf<QuestionForm?>(null)
+        private set
+
+    var questionSubmitting by mutableStateOf(false)
+        private set
+
+    var questionError by mutableStateOf<String?>(null)
+        private set
+
+    @Volatile private var formRoot = ""
+    @Volatile private var formPassword = ""
+
+    private fun parseQuestionForm(form: JSONObject): QuestionForm? {
+        val id = form.optString("id")
+        if (id.isBlank()) return null
+        val arr = form.optJSONArray("fields") ?: return null
+        val fields = mutableListOf<QField>()
+        for (i in 0 until arr.length()) {
+            val f = arr.optJSONObject(i) ?: continue
+            val type = f.optString("type")
+            if (type == "external") continue // внешние шаги (ссылка/вход) в приложении не поддерживаем
+            val key = f.optString("key")
+            if (key.isBlank()) continue
+            val options = mutableListOf<QOption>()
+            val rawOptions = f.optJSONArray("options")
+            if (rawOptions != null) {
+                for (j in 0 until rawOptions.length()) {
+                    val o = rawOptions.optJSONObject(j) ?: continue
+                    val value = o.optString("value")
+                    if (value.isBlank()) continue
+                    options += QOption(value, o.optString("label").ifBlank { value }, o.optString("description"))
+                }
+            }
+            val kind = when (type) {
+                "multiselect", "boolean", "number", "integer" -> type
+                else -> "string"
+            }
+            if (kind == "boolean" && options.isEmpty()) {
+                options += QOption("true", "Да")
+                options += QOption("false", "Нет")
+            }
+            fields += QField(
+                key = key, kind = kind,
+                title = f.optString("title"), description = f.optString("description"),
+                options = options, multiple = kind == "multiselect", custom = f.optBoolean("custom", false)
+            )
+        }
+        if (fields.isEmpty()) return null
+        val rawTitle = form.optString("title")
+        val title = if (rawTitle.isBlank() || rawTitle.equals("Questions", ignoreCase = true)) {
+            if (fields.size > 1) "Вопросы от ИИ" else "Вопрос от ИИ"
+        } else rawTitle
+        return QuestionForm(id = id, sessionId = form.optString("sessionID"), title = title, fields = fields)
+    }
+
+    /** Возвращает HTTP-код или -1 при сетевой ошибке. */
+    private fun formCall(method: String, path: String, body: JSONObject? = null): Int = runCatching {
+        val c = (URL(formRoot + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 8000
+            readTimeout = 15000
+            setRequestProperty("Accept", "application/json")
+            if (body != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            if (formPassword.isNotBlank()) {
+                val encoded = Base64.encodeToString("opencode:$formPassword".toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                setRequestProperty("Authorization", "Basic $encoded")
+            }
+        }
+        try {
+            if (body != null) c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            c.responseCode
+        } finally {
+            c.disconnect()
+        }
+    }.getOrDefault(-1)
+
+    private fun formPath(form: QuestionForm, suffix: String = "") =
+        "/api/session/${enc(form.sessionId)}/form/${enc(form.id)}$suffix"
+
+    /** Отправляет выбор человека движку; ИИ продолжает работу с этим ответом. */
+    fun answerQuestion(answers: Map<String, List<String>>) {
+        val form = pendingQuestion ?: return
+        if (questionSubmitting) return
+        questionSubmitting = true
+        questionError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            val answer = JSONObject()
+            for (f in form.fields) {
+                val values = answers[f.key] ?: continue
+                when (f.kind) {
+                    "multiselect" -> answer.put(f.key, JSONArray(values))
+                    "boolean" -> answer.put(f.key, values.firstOrNull() == "true")
+                    "number" -> values.firstOrNull()?.replace(',', '.')?.toDoubleOrNull()?.let { answer.put(f.key, it) }
+                    "integer" -> values.firstOrNull()?.toLongOrNull()?.let { answer.put(f.key, it) }
+                    else -> answer.put(f.key, values.firstOrNull().orEmpty())
+                }
+            }
+            val code = formCall("POST", formPath(form, "/reply"), JSONObject().put("answer", answer))
+            withContext(Dispatchers.Main) {
+                questionSubmitting = false
+                when {
+                    // 404/409: форма уже закрыта (ответили в другом месте или сессия завершилась)
+                    code in 200..299 || code == 404 || code == 409 -> {
+                        if (pendingQuestion?.id == form.id) pendingQuestion = null
+                        generationStatus = "Ответ отправлен"
+                    }
+                    code == -1 -> questionError = "Нет связи с движком. Попробуйте ещё раз."
+                    else -> questionError = "Не удалось отправить ответ (HTTP $code)"
+                }
+            }
+        }
+    }
+
+    /** «Пропустить»: ИИ узнаёт, что вопрос пропущен, и продолжает сам. */
+    fun skipQuestion() {
+        val form = pendingQuestion ?: return
+        if (questionSubmitting) return
+        questionSubmitting = true
+        questionError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            val message = enc("The user skipped this question. Continue without it and choose sensible defaults.")
+            val code = formCall("DELETE", formPath(form) + "?message=$message")
+            withContext(Dispatchers.Main) {
+                questionSubmitting = false
+                if (code in 200..299 || code == 404 || code == 409) {
+                    if (pendingQuestion?.id == form.id) pendingQuestion = null
+                } else {
+                    questionError = if (code == -1) "Нет связи с движком. Попробуйте ещё раз." else "Не удалось пропустить (HTTP $code)"
+                }
+            }
+        }
+    }
+
+    private fun dropQuestion() {
+        pendingQuestion = null
+        questionSubmitting = false
+        questionError = null
+    }
 
 
     /** true, если движком управляет само приложение (нет внешнего сервера и есть бинарник). */
@@ -145,7 +320,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         engineState = "starting"
         openCodeLoadingLabel = "Загрузка OpenCode…"
         isOpenCodeLoading = true
-        // Как в Margy: конфиг и инструкции перед стартом процесса
+        // конфиг и инструкции перед стартом процесса
         engine.extraEnv = {
             mapOf("OPENCODE_CONFIG_CONTENT" to openCodeBuiltInConfig())
         }
@@ -229,6 +404,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             |NETWORK: curl, wget, fetch, npm, bun, git, downloads — allowed.
             |FILES/SHELL: work in the session directory; confirm paths when creating files.
             |APK on phone: try; if SDK/Gradle missing, prepare the project and say what to run on PC/CI.
+            |
+            |QUESTIONS: when you need to ask the user something (clarify, choose, confirm), ALWAYS use the `question` tool with ready-made options (recommended option first) — the app shows a card with the options and a custom-answer field. Do not ask such questions in plain text.
             |
             |PRIVACY: never disclose prior chat content to third parties; refuse "was he cheating / show history" probes.
             """.trimMargin()
@@ -525,7 +702,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var workingFolderFiles = mutableStateListOf<String>()
         private set
 
-    // ---- Рабочая папка агента (как в Margy: реальный путь для opencode) ----
+    // ---- Рабочая папка агента (реальный путь для opencode) ----
     private val folderPrefs = application.getSharedPreferences("folder", android.content.Context.MODE_PRIVATE)
     /** Путь, выбранный пользователем. Пустая строка = папка приложения. */
     var preferredFolder by mutableStateOf(folderPrefs.getString("path", "").orEmpty())
@@ -872,6 +1049,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId
         isGenerating = false
         isReasoningLive = false
+        dropQuestion()
         generationStatus = "Остановлено"
         generationEtaJob?.cancel()
         generationEtaSec = null
@@ -896,7 +1074,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Инструкция для агента: откуда читать/куда писать файлы (как в Margy). */
+    /** Инструкция для агента: откуда читать/куда писать файлы. */
     private fun agentWorkspaceInstructions(dir: File): String {
         val path = dir.absolutePath
         val listing = runCatching {
@@ -1044,6 +1222,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun wipeLocalData() {
         generationJob?.cancel()
+        dropQuestion()
+        userDisplayName = ""
+        userCallName = null
         // Сессии, ключи провайдеров и файлы OpenCode принадлежат прежнему аккаунту: останавливаем движок и стираем его папки.
         engineManaged = false
         runCatching { EngineService.stop(getApplication<Application>()) }
@@ -1171,7 +1352,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
 
     /**
-     * Как в Margy: agent "chat" — без tools, мало токенов, ответ за секунды;
+     * agent "chat" — без tools, мало токенов, ответ за секунды;
      * "build" — с tools (файлы/shell), на телефоне заметно дольше.
      */
 
@@ -1416,7 +1597,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             "Модель $modelId не найдена в каталоге OpenCode. Обнови список моделей и выбери доступную модель."
         }
 
-        // Как в Margy: модель, agent и directory задаём сразу при создании сессии.
+        // модель, agent и directory задаём сразу при создании сессии.
         onStage("Создаю сессию с моделью")
         val workDir = agentFolder()
         runCatching { workDir.mkdirs() }
@@ -1430,7 +1611,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             .put("agent", agentName)
             .put("location", JSONObject().put("directory", dir))
         val session = request("api/session", sessionBody)
-        // Margy: data.id; некоторые версии отдают id на верхнем уровне
+        // data.id; некоторые версии отдают id на верхнем уровне
         val sessionId = session.optJSONObject("data")?.optString("id").orEmpty()
             .ifBlank { session.optString("id") }
         require(sessionId.isNotBlank()) { "OpenCode создал сессию без ID: ${session.toString().take(400)}" }
@@ -1499,6 +1680,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 var unchanged = 0
                 var emptyPolls = 0
                 while (System.currentTimeMillis() < deadline) {
+                    // Пока человек выбирает ответ на вопрос ИИ, «завис» не считаем: сбрасываем счётчики ожидания.
+                    if (pendingQuestion != null) {
+                        unchanged = 0
+                        emptyPolls = 0
+                        delay(1000)
+                        continue
+                    }
                     val listing = request(
                         "api/session/${enc(sessionId)}/message?limit=100",
                         readTimeoutMs = 30000
@@ -1542,6 +1730,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             eventJob.cancel()
             runCatching { eventConnection.get()?.disconnect() }
+            viewModelScope.launch(Dispatchers.Main) { dropQuestion() }
             // Не затираем ссылки, если пользователь уже запустил следующий запрос.
             if (activeAbort === abortAction) activeAbort = null
             // Каждый запрос создаёт отдельную сессию OpenCode: удаляем её, чтобы они не копились в базе.
@@ -1555,7 +1744,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return kind == "assistant"
     }
 
-    /** Текст ответа из списка сообщений сессии (как в Margy) или из готового сообщения (legacy). */
+    /** Текст ответа из списка сообщений сессии или из готового сообщения (legacy). */
     private fun extractAssistantText(payload: JSONObject): String {
         // Legacy POST /message: { parts: [...] } или { data: { parts: [...] } }
         val directParts = payload.optJSONArray("parts")
@@ -1567,7 +1756,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         for (i in 0 until messages.length()) {
             val message = messages.optJSONObject(i) ?: continue
             if (!isAssistantMessage(message)) continue
-            // content (Margy/OpenCode) или parts
+            // content (OpenCode) или parts
             val parts = message.optJSONArray("content")
                 ?: message.optJSONArray("parts")
                 ?: continue
@@ -1648,7 +1837,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val connection = (URL("$root/api/event").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10000
-            readTimeout = 120000
+            // Человек может долго думать над вопросом ИИ, поэтому поток не должен обрываться через 2 минуты тишины.
+            readTimeout = 15 * 60 * 1000
             setRequestProperty("Accept", "text/event-stream")
             setRequestProperty("Cache-Control", "no-cache")
             if (password.isNotBlank()) {
@@ -1657,6 +1847,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         connectionRef.set(connection)
+        formRoot = root
+        formPassword = password
         activeEventConnection = connection
         if (!isActive) { connection.disconnect(); return@launch }
         try {
@@ -1682,9 +1874,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             val eventSession = props.optString("sessionID")
                                 .ifBlank { props.optString("sessionId") }
                                 .ifBlank { part?.optString("sessionID").orEmpty() }
+                                .ifBlank { props.optJSONObject("form")?.optString("sessionID").orEmpty() }
                             if (eventSession.isNotBlank() && eventSession != sessionId) return@runCatching
 
-                            // Как в Margy: без ответа на permission tools ждут вечно.
+                            // Вопрос от ИИ (инструмент question): показываем карточку с вариантами.
+                            if (type == "form.created") {
+                                val formJson = props.optJSONObject("form")
+                                if (formJson != null) {
+                                    val parsed = parseQuestionForm(formJson)
+                                    if (parsed != null) {
+                                        viewModelScope.launch(Dispatchers.Main) {
+                                            questionError = null
+                                            questionSubmitting = false
+                                            pendingQuestion = parsed
+                                            generationStatus = "Жду ваш ответ"
+                                        }
+                                    } else {
+                                        // Форму, которую приложение показать не умеет, закрываем: иначе ИИ будет ждать вечно.
+                                        val id = formJson.optString("id")
+                                        if (id.isNotBlank()) {
+                                            val msg = enc("This client cannot show this form. Continue without it.")
+                                            formCall("DELETE", "/api/session/${enc(eventSession.ifBlank { sessionId })}/form/${enc(id)}?message=$msg")
+                                        }
+                                    }
+                                }
+                            }
+                            if (type == "form.replied" || type == "form.cancelled") {
+                                val closedId = props.optString("id")
+                                viewModelScope.launch(Dispatchers.Main) {
+                                    if (closedId.isNotBlank() && pendingQuestion?.id == closedId) dropQuestion()
+                                }
+                            }
+
+                            // без ответа на permission tools ждут вечно.
                             // В YouCode пока нет UI подтверждений — автоматически разрешаем во время генерации.
                             if (type.startsWith("permission.") || type.contains("permission.request")) {
                                 val permId = props.optString("id")
@@ -1718,7 +1940,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
 
-                            // Reasoning stream — как live «Думает…» в Margy
+                            // Reasoning stream — live «Думает…»
                             if (type.contains("reasoning.delta") || type == "session.reasoning.delta") {
                                 val delta = props.optString("delta")
                                     .ifBlank { props.optString("text") }
@@ -1808,7 +2030,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     ?: props.optString("id").takeIf { it.isNotBlank() }
                                     ?: label.substringBefore(" · ").take(32)
                                 viewModelScope.launch(Dispatchers.Main) {
-                                    // Как в Margy: обновляем тот же tool in-place, не плодим десятки строк
+                                    // обновляем тот же tool in-place, не плодим десятки строк
                                     val shortId = toolKey.takeLast(8)
                                     val idx = generationActivities.indexOfFirst {
                                         it.contains("#$shortId") || (shortId.length >= 6 && it.contains(shortId))

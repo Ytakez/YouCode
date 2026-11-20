@@ -533,7 +533,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                     }
                 )
 
-                // Нижний ряд как в Margy / ChatGPT: + · папка · отправить
+                // Нижний ряд: + · папка · отправить
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
@@ -662,7 +662,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                         }
                     }
 
-                    // Чип папки — как FolderChip в Margy
+                    // Чип папки
                     Surface(
                         color = if (viewModel.workingFolderName != null)
                             MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
@@ -1196,7 +1196,7 @@ private fun GenerationActivity(
             }
         }
 
-        // Блок рассуждений — как Thoughts в Margy: можно раскрыть и читать
+        // Блок рассуждений: можно раскрыть и читать
         if (reasoning.isNotBlank()) {
             Column {
                 Row(

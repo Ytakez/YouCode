@@ -257,7 +257,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: ChatViewModel? = null, onSignO
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        "Меняется кнопкой «Папка» в чате (как в Margy).",
+                        "Меняется кнопкой с папкой в поле ввода чата.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp)

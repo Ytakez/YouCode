@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opencode.ai.data.ChatSession
+import com.opencode.ai.profile.AvatarImage
 
 @Composable
 fun AppDrawer(
@@ -63,7 +64,11 @@ fun AppDrawer(
     onSettingsClick: () -> Unit,
     onModelsClick: () -> Unit,
     onSkillsClick: () -> Unit = {},
-    onSignOut: (() -> Unit)? = null
+    onSignOut: (() -> Unit)? = null,
+    profileName: String = "",
+    profileSubtitle: String = "AI workspace",
+    avatarUrl: String = "",
+    onProfileClick: (() -> Unit)? = null
 ) {
     val startOfToday = java.util.Calendar.getInstance().apply {
         set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -89,60 +94,33 @@ fun AppDrawer(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // Brand panel
+            // Панель профиля: фото и имя из Telegram, по нажатию открывается экран профиля
             Surface(
                 shape = RoundedCornerShape(32.dp),
                 color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp, vertical = 14.dp)
+                    .clip(RoundedCornerShape(32.dp))
+                    .then(if (onProfileClick != null) Modifier.clickable(onClick = onProfileClick) else Modifier)
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val shimmer = rememberInfiniteTransition(label = "brand_shimmer")
-                    val shift by shimmer.animateFloat(
-                        initialValue = 0f,
-                        targetValue = 160f,
-                        animationSpec = infiniteRepeatable(tween(3200, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-                        label = "brand_shift"
-                    )
-                    Box(
-                        modifier = Modifier
-                            .floating(amplitude = 3.dp, periodMs = 2600)
-                            .size(52.dp)
-                            .clip(rememberMorphShape())
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.surface,
-                                        MaterialTheme.colorScheme.tertiaryContainer,
-                                        MaterialTheme.colorScheme.secondaryContainer
-                                    ),
-                                    start = Offset(shift, 0f),
-                                    end = Offset(shift + 120f, 120f)
-                                )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Outlined.Code,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(25.dp)
-                        )
-                    }
+                    AvatarImage(avatarUrl, profileName, 52.dp)
                     Spacer(Modifier.width(14.dp))
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            "YouCode",
+                            profileName.ifBlank { "YouCode" },
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Text(
-                            "AI workspace",
+                            profileSubtitle,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
                         )
