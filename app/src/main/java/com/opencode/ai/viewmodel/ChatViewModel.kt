@@ -1949,6 +1949,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 var emptyPolls = 0
                 var settled = 0
                 var signalled = false
+                var lastSig = ""
+                var lastChangeAt = System.currentTimeMillis()
                 while (System.currentTimeMillis() < deadline) {
                     // Пока человек выбирает ответ на вопрос ИИ, «завис» не считаем: сбрасываем счётчики ожидания.
                     if (pendingQuestion != null) {
@@ -1969,6 +1971,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     assistantError(listing)?.let {
                         throw IllegalStateException("Модель вернула ошибку: $it")
+                    }
+                    // Сторож: если 4 минуты ничего не менялось (ни шагов, ни текста, ни потока символов)
+                    // и ни один инструмент не выполняется — модель зависла. Не ждём два часа.
+                    val sig = "${steps.size}|${steps.lastOrNull()?.status}|${text.length}|${charsSeen.get()}"
+                    val now = System.currentTimeMillis()
+                    if (sig != lastSig) {
+                        lastSig = sig
+                        lastChangeAt = now
+                    } else if (now - lastChangeAt > 240_000L &&
+                        steps.none { it.kind == "tool" && it.status == "running" }
+                    ) {
+                        runCatching { abortAction() }
+                        break
                     }
                     if (text.isNotBlank()) {
                         emptyPolls = 0
@@ -1999,6 +2014,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         // Сообщений ассистента ещё нет: модель могла не запуститься вовсе.
                         if (sessionHasAssistantMessage(listing)) {
                             emptyPolls = 0
+                            // Агент выполнил инструменты (например, записал файл) и закончил без итогового текста:
+                            // раньше цикл ждал вечно. Два опроса подряд «всё завершено» — выходим.
+                            if (!assistantWorkInProgress(listing) && assistantMessagesCompleted(listing)) {
+                                if (signalled || ++settled >= 2) break
+                            } else {
+                                settled = 0
+                            }
                         } else if (++emptyPolls >= 170) {
                             throw IllegalStateException(
                                 "Модель не начала отвечать за 2 минуты. Проверь выбранную модель и подключение провайдера в OpenCode."
@@ -2013,7 +2035,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 collected
             }
             return answer.ifBlank {
-                throw IllegalStateException("OpenCode не вернул текст ответа. Проверь, что выбранная модель доступна в каталоге.")
+                val tools = lastRunSteps.filter { it.kind == "tool" }
+                if (tools.isNotEmpty()) {
+                    val failed = tools.count { it.status == "error" }
+                    buildString {
+                        append("Готово: агент выполнил ${tools.size} шаг(ов)")
+                        if (failed > 0) append(", ошибок: $failed")
+                        append(".\nПоследнее действие: ${tools.last().title}")
+                    }
+                } else {
+                    throw IllegalStateException("OpenCode не вернул текст ответа. Проверь, что выбранная модель доступна в каталоге.")
+                }
             }
         } finally {
             eventJob.cancel()
