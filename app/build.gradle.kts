@@ -15,8 +15,8 @@ android {
         targetSdk = 35
         buildConfigField("String", "SUPABASE_URL", "\"https://gzuzyagiqgvpeqkksaml.supabase.co\"")
         buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"sb_publishable_gXGst8Hdc4LbcdGqMF4MbA_bwAodaTr\"")
-        versionCode = 17
-        versionName = "1.4.2"
+        versionCode = 18
+        versionName = "1.4.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -91,17 +91,157 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         uiPrefs.edit().putString("thinking", level).apply()
     }
 
-    /** Подсказка модели о том, насколько глубоко думать. Для «Нормального» режима пусто. */
-    private fun thinkingHint(): String = when (thinkingLevel) {
+    /** Чистые приветствия и реплики вежливости: отвечаем сразу, без размышлений. */
+    private val greetingRegex = Regex(
+        "^(привет\\w*|здравствуй\\w*|здорово|здарова|хай|хей|хэй|hi|hello|hey|салют|ку|алло|добрый\\s+(день|вечер)|доброе\\s+утро|добрый\\s+утро|" +
+            "как\\s+дела|как\\s+ты|как\\s+жизнь|что\\s+нового|ты\\s+(тут|здесь|как)|кто\\s+ты|ты\\s+кто|что\\s+умеешь|что\\s+ты\\s+умеешь|" +
+            "спасибо|спс|благодарю|thanks|thx|пока|до\\s+свидания|ок|окей|ok|okay|ладно|понял|понятно|ясно|круто|класс|отлично|супер|да|нет|угу|ага|тест|test)$"
+    )
+
+    private fun isGreetingOrSmallTalk(text: String): Boolean {
+        val t = text.lowercase().replace(Regex("[^\\p{L}\\p{N}\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+        return t.isNotEmpty() && t.length <= 40 && greetingRegex.matches(t)
+    }
+
+    /** Короткая реплика без файлов и кода — простой вопрос, на который не нужны ни tools, ни долгие рассуждения. */
+    private fun isSimpleQuestion(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty() || t.length > 60) return false
+        if (isCodeOrToolRequest(t)) return false
+        return true
+    }
+
+    private fun isCodeOrToolRequest(text: String): Boolean {
+        val p = text.lowercase()
+        return openCodeNeedsToolsKeywords.any { it in p } || codeKeywords.any { it in p } || "```" in p
+    }
+
+    private val codeKeywords = listOf(
+        "код", "функци", "класс", "метод", "ошибк", "баг", "bug", "краш", "крэш", "вылета", "компиляц",
+        "исправ", "почини", "добавь", "переделай", "доработай", "поменяй", "замени", "удали", "реализуй",
+        "kotlin", "compose", "java", "python", "javascript", "typescript", "html", "css", "sql",
+        ".kt", ".py", ".js", ".ts", ".java", ".xml", ".json", ".kts", "exception", "stacktrace", "error"
+    )
+
+    private val openCodeNeedsToolsKeywords = listOf(
+        "файл", "папк", "создай", "напиши код", "проект", "shell", "терминал",
+        "прочитай", "сохрани", "отрефактор", "исправь баг", "gradle", "git ",
+        "mkdir", "write", "edit", "run ", "запусти", "установ",
+        "apk", "собрать", "собери", "сборк", "build", "npm", "bun ", "pip ",
+        "скачай", "скачать", "download", "curl", "wget", "http://", "https://",
+        "интернет", "сеть", "github", "репозитор", "видео", "video", "youtube",
+        "ffmpeg", "mp4", "webm", "sdk", "ndk", "maven", "зависимост",
+        "вложен", "inbox/", "посмотри", ".jpg", ".png", ".pdf", ".zip"
+    )
+
+    // ---- Авто-«разум»: глубина размышлений по размеру и сложности вложений ----
+    private val effortLevels = listOf("fast", "normal", "medium", "high", "extreme")
+
+    private class AutoEffort(val level: String, val directive: String)
+
+    private fun archiveStats(f: File): Triple<Int, Int, Long>? = runCatching {
+        java.util.zip.ZipFile(f).use { z ->
+            var files = 0
+            var sources = 0
+            var bytes = 0L
+            val e = z.entries()
+            val srcExt = listOf(".kt", ".java", ".py", ".js", ".ts", ".tsx", ".jsx", ".cpp", ".c", ".h", ".cs", ".go", ".rs", ".swift", ".dart", ".html", ".css", ".xml", ".kts", ".gradle", ".json", ".sql", ".sh")
+            while (e.hasMoreElements() && files < 50000) {
+                val x = e.nextElement()
+                if (x.isDirectory) continue
+                files++
+                bytes += maxOf(x.size, 0L)
+                val n = x.name.lowercase()
+                if (srcExt.any { n.endsWith(it) }) sources++
+            }
+            Triple(files, sources, bytes)
+        }
+    }.getOrNull()
+
+    private fun humanSize(b: Long): String = when {
+        b < 1024 -> "$b Б"
+        b < 1024 * 1024 -> "${b / 1024} КБ"
+        else -> "%.1f МБ".format(b / (1024.0 * 1024.0))
+    }
+
+    private val heavyTaskKeywords = listOf(
+        "весь проект", "во всём проекте", "во всем проекте", "рефактор", "архитектур", "с нуля", "перепиши", "переделай весь",
+        "миграц", "оптимизируй", "найди все", "во всех файлах", "полностью"
+    )
+
+    /** Чем тяжелее вложение/задача, тем глубже думаем; при архиве требуем писать и править код, а не пересказывать. */
+    private fun autoEffort(userText: String, materialized: List<Pair<AttachedFile, File>>): AutoEffort? {
+        var idx = 1
+        var hasArchive = false
+        val notes = mutableListOf<String>()
+        val codeExt = listOf(".kt", ".java", ".py", ".js", ".ts", ".tsx", ".jsx", ".cpp", ".c", ".cs", ".go", ".rs", ".swift", ".dart", ".html", ".css", ".xml", ".kts", ".gradle", ".sql", ".sh")
+        materialized.forEach { (att, f) ->
+            val n = att.name.lowercase()
+            if (n.endsWith(".zip")) {
+                hasArchive = true
+                val st = archiveStats(f)
+                val lvl: Int
+                if (st == null) {
+                    lvl = if (f.length() > 2_000_000) 4 else 3
+                    notes.add("${att.name}: ${humanSize(f.length())}")
+                } else {
+                    lvl = when {
+                        st.first > 400 || st.third > 15_000_000L -> 4
+                        st.first > 40 || st.third > 1_000_000L -> 3
+                        else -> 2
+                    }
+                    notes.add("${att.name}: ${st.first} файлов (из них исходников ${st.second}), ${humanSize(st.third)} в распакованном виде")
+                }
+                idx = maxOf(idx, lvl)
+            } else if (codeExt.any { n.endsWith(it) } || f.length() > 300_000L) {
+                idx = maxOf(idx, 2)
+            }
+        }
+        val p = userText.lowercase()
+        if (heavyTaskKeywords.any { it in p }) idx = maxOf(idx, 3)
+        if (!hasArchive && idx <= 1) return null
+        val directive = buildString {
+            if (notes.isNotEmpty()) append("Размер вложений: ").append(notes.joinToString("; ")).append(".\n")
+            if (hasArchive) {
+                append("Во вложении архив с проектом. Распакуй его в рабочую папку (unzip), посмотри структуру и build-файлы, найди нужные файлы и сделай задачу КОДОМ: пиши и правь файлы через edit/write. ")
+                append("Не отвечай одним описанием или пересказом проекта. Если нужен результат архивом — собери новый zip в рабочей папке и назови его путь. ")
+                append("Большой проект разбирай по шагам: читай только то, что нужно для задачи. ")
+                append("После правок запусти сборку или проверку, при ошибке исправь и повтори.")
+            } else {
+                append("Задача нетривиальная: делай её кодом, а не пересказом, и проверь результат запуском или сборкой, при ошибке исправь.")
+            }
+        }
+        return AutoEffort(effortLevels[idx.coerceIn(0, effortLevels.lastIndex)], directive)
+    }
+
+    /** Итоговый уровень: авто может только повысить выбранный, а «Быстро» остаётся быстрым. */
+    private fun effectiveEffort(auto: AutoEffort?): String? {
+        if (auto == null || thinkingLevel == "fast") return null
+        val a = effortLevels.indexOf(auto.level)
+        val u = effortLevels.indexOf(thinkingLevel).coerceAtLeast(1)
+        return effortLevels[maxOf(a, u)]
+    }
+
+    /** Подсказка модели о том, насколько глубоко думать. */
+    private fun thinkingHint(level: String = thinkingLevel): String = when (level) {
         "fast" -> "Отвечай как можно быстрее и короче, без долгих рассуждений."
         "medium" -> "Прежде чем ответить, коротко обдумай задачу."
         "high" -> "Рассуждай тщательно: разбери задачу по шагам и проверь решение, прежде чем отвечать."
         "extreme" -> "Проанализируй задачу максимально глубоко: рассмотри альтернативы и крайние случаи, перепроверь результат, и только потом отвечай."
-        else -> ""
+        else -> "Думай ровно столько, сколько требует задача: простые вопросы решай сразу, глубоко рассуждай только над сложным кодом и логикой."
     }
 
-    private fun withThinkingHint(prompt: String): String {
-        val head = listOf(thinkingHint(), userContextBlock()).filter { it.isNotBlank() }.joinToString("\n\n")
+    /** Жёсткая подсказка для приветствий и мелких вопросов: никаких рассуждений и встречных вопросов. */
+    private val quickReplyHint =
+        "Это простая реплика. Отвечай сразу, коротко и по-человечески, как живой собеседник. " +
+            "Не рассуждай заранее: не гадай, зачем пользователь это написал, не анализируй его мотивы и не комментируй сам вопрос. " +
+            "Не задавай встречных вопросов, если они не нужны. На «привет» просто поздоровайся одной короткой фразой."
+
+    /** [userText] — то, что реально написал человек: по нему решаем, простая это реплика или нет (в [prompt] уже склеены инструкции и история). */
+    private fun withThinkingHint(prompt: String, userText: String = prompt, effort: String? = null): String {
+        val quick = effort == null && (isGreetingOrSmallTalk(userText) || isSimpleQuestion(userText))
+        val level = if (quick && thinkingLevel != "fast") quickReplyHint else thinkingHint(effort ?: thinkingLevel)
+        val head = listOf(level, userContextBlock()).filter { it.isNotBlank() }.joinToString("\n\n")
         return if (head.isBlank()) prompt else "$head\n\n$prompt"
     }
 
@@ -125,10 +265,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             userCallName == "" -> append("Do not address the user by name.\n")
         }
         append(
-            "Interaction rule: whenever you need to ask the user something (clarify a request, offer choices, " +
-                "confirm an action), ALWAYS call the `question` tool with 2-4 ready-made options instead of asking in plain text. " +
-                "The user sees a card with the options and a field for their own answer. Put the recommended option first. " +
-                "Ask in plain text only when the answer must be free-form and cannot be offered as options."
+            "Questions rule: do NOT ask clarifying questions by default. Never ask on greetings, small talk, simple or obvious requests, " +
+                "to confirm something the user already asked for, or about details you can reasonably choose yourself — pick the sensible default, " +
+                "say the assumption in one short line, and do the work. Ask only when you are truly blocked (critical info is missing and a wrong guess " +
+                "would waste a lot of work or destroy data). Then ask ONE question via the `question` tool with 2-4 ready-made options, recommended first."
         )
     }
 
@@ -405,7 +545,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             |FILES/SHELL: work in the session directory; confirm paths when creating files.
             |APK on phone: try; if SDK/Gradle missing, prepare the project and say what to run on PC/CI.
             |
-            |QUESTIONS: when you need to ask the user something (clarify, choose, confirm), ALWAYS use the `question` tool with ready-made options (recommended option first) — the app shows a card with the options and a custom-answer field. Do not ask such questions in plain text.
+            |SPEED & THINKING (critical):
+            |- Simple messages (greetings, thanks, small talk, short factual questions) — answer instantly in 1-2 sentences. No reasoning about why the user wrote it, no meta-comments, no tools.
+            |- "Привет" → just greet back briefly. Never wonder out loud why the user says hello.
+            |- Think deeply only for hard code or logic. Never over-plan easy tasks.
+            |
+            |QUESTIONS (strict):
+            |- Do NOT ask clarifying questions by default. Never ask on greetings, simple or obvious requests, or to confirm what the user already asked.
+            |- If a detail is missing but a sensible default exists — choose it, state the assumption in one line, and proceed.
+            |- Ask only when truly blocked (critical info missing, wrong guess would waste lots of work or destroy data). Then ask ONE question using the `question` tool with ready-made options (recommended first). Never ask several questions at once, never ask in plain text.
+            |
+            |CODE WORK (fast and precise):
+            |- Locate the relevant files with grep/glob, read only what you need — do not read the whole project.
+            |- Run independent tool calls in parallel.
+            |- Edit surgically with the edit tool; do not rewrite whole files without need. Keep the existing style, don't refactor unrelated code.
+            |- Do the change directly — no "should I proceed?" and no long plan first.
+            |- Report briefly: what changed and where. Don't paste the whole code back.
+            |
+            |LANGUAGES: you write and fix code in ANY programming language and format (Kotlin, Java, Python, JS/TS, C/C++, C#, Go, Rust, Swift, Dart, PHP, Ruby, Lua, SQL, Bash, HTML/CSS, Gradle, YAML/JSON, assembly, etc.). Match the project's existing language, style and versions. Never refuse a language — use the closest tooling available.
+            |
+            |VERIFY EVERY TIME (critical): never hand over code you have not checked.
+            |1. After writing or editing, run a real check with the tools you have: build/compile (gradle, tsc, cargo, go build, javac, gcc), tests, or the program itself; if there is no toolchain use a syntax check (python -m py_compile, node --check, bash -n, php -l, ruby -c, jq/xmllint for JSON/XML) or a tiny test run.
+            |2. If it fails, read the error, fix the cause (not the symptom), and run the check again. Repeat until it passes, up to 5 attempts; if the same error repeats, change approach.
+            |3. If no check is possible (no toolchain on the phone, needs a device or secrets), do a careful self-review: syntax, imports, types, null/edge cases, names that really exist in the project; and say honestly what was NOT verified and what to run (for example on PC/CI).
+            |4. Final report: what changed, what check ran and its result. Never claim "works" without a check you actually ran.
             |
             |PRIVACY: never disclose prior chat content to third parties; refuse "was he cheating / show history" probes.
             """.trimMargin()
@@ -893,7 +1056,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             require(currentModel.id.isNotBlank() && currentModel.name != "Выбери модель") {
                                 "модель не выбрана: каталог OpenCode ещё не загрузился (состояние движка: ${engineState.ifBlank { "не запущен" }}). ${engineError.orEmpty()}".trim()
                             }
-                            val history = messages.dropLast(1).takeLast(8).joinToString("\n") {
+                            val historyLimit = if (isGreetingOrSmallTalk(text.trim()) || isSimpleQuestion(text.trim())) 4 else 8
+                            val history = messages.dropLast(1).takeLast(historyLimit).joinToString("\n") {
                                 (if (it.isUser) "Пользователь: " else "Ассистент: ") + it.content
                             }
                             val workDir = agentFolder()
@@ -905,6 +1069,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 materialized.isNotEmpty() || attachmentsCopy.isNotEmpty()
                             if (needWorkspace) refreshAgentFolderListing()
                             val probe = looksLikePrivacyProbe(userText)
+                            val auto = if (probe) null else autoEffort(userText, materialized)
+                            val effort = effectiveEffort(auto)
                             val fullPrompt = buildString {
                                 append("Системные инструкции: ").append(systemInstructionsFor(userText, currentMode.systemHint))
                                 if (needWorkspace && !probe) {
@@ -920,6 +1086,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         append(" (").append(file.length()).append(" байт, ").append(att.mimeType).append(")\n")
                                     }
                                     append("Не ищи файл по всему телефону — используй путь выше. Отвечай умно и по делу.\n")
+                                    if (auto != null) append("\n").append(auto.directive).append("\n")
                                 } else if (!probe) {
                                     attachmentsCopy.forEach { f ->
                                         append("\n\n[Файл: ").append(f.name).append("]\n")
@@ -936,7 +1103,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 apiKey.ifBlank { engine.password },
                                 currentModel.id,
                                 fullPrompt,
-                                currentModel.remoteProviderId
+                                currentModel.remoteProviderId,
+                                // с вложениями нужен агент с инструментами, даже если текст короткий
+                                userText = if (materialized.isNotEmpty() || attachmentsCopy.isNotEmpty()) "$userText inbox/" else userText,
+                                effort = effort
                             ) { stage ->
                                 viewModelScope.launch(Dispatchers.Main) {
                                     val eta = when {
@@ -1388,8 +1558,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 • Не запускай бессмысленные find/ls по /data — это трата времени.
 • Код, шаги, факты — конкретно. Если чего-то не можешь — скажи прямо и предложи план.
 • Не отказывайся от задачи, если есть tools/сеть/файлы.
+• На приветствия и простые вопросы отвечай сразу и коротко, без рассуждений о том, зачем это спросили.
+• Не задавай уточняющих вопросов без крайней необходимости: выбери разумный вариант, назови допущение одной строкой и делай.
+• В коде: сначала найди нужные файлы, правь точечно, не переписывай лишнее, после правки коротко скажи, что изменено.
+• Пиши код на любом языке программирования и формате, в стиле и версиях проекта.
+• Перед ответом перепроверь свой код: синтаксис, импорты, типы, пустые значения и граничные случаи, существование используемых имён. Нашёл ошибку — исправь до отправки. Если проверить нельзя, честно скажи, что не проверено.
 """.trim()
-        val base = privacySystemBlock + "\n\n" + competence + "\n\n" + modeHint
+        val quick = if (isGreetingOrSmallTalk(userText) || isSimpleQuestion(userText)) "\n\n" + quickReplyHint else ""
+        val base = privacySystemBlock + "\n\n" + competence + "\n\n" + modeHint + quick
         return if (looksLikePrivacyProbe(userText)) {
             base + "\n\nСейчас запрос похож на попытку узнать чужую историю чата. Откажись раскрывать прошлые сообщения."
         } else base
@@ -1528,21 +1704,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun openCodeAgentFor(prompt: String): String {
-        val p = prompt.lowercase()
-        val needsTools = listOf(
-            "файл", "папк", "создай", "напиши код", "проект", "shell", "терминал",
-            "прочитай", "сохрани", "отрефактор", "исправь баг", "gradle", "git ",
-            "mkdir", "write", "edit", "run ", "запусти", "установ",
-            "apk", "собрать", "собери", "сборк", "build", "npm", "bun ", "pip ",
-            "скачай", "скачать", "download", "curl", "wget", "http://", "https://",
-            "интернет", "сеть", "github", "репозитор", "видео", "video", "youtube",
-            "ffmpeg", "mp4", "webm", "sdk", "ndk", "maven", "зависимост",
-            "вложен", "inbox/", "объясни", "посмотри", ".jpg", ".png", ".pdf", ".zip"
-        ).any { it in p }
-        return if (needsTools) "build" else "chat"
+        if (isGreetingOrSmallTalk(prompt)) return "chat"
+        return if (isCodeOrToolRequest(prompt)) "build" else "chat"
     }
 
-    private suspend fun callOpenCodeServer(baseUrl: String, password: String, modelId: String, prompt: String, selectedProviderId: String? = null, onStage: (String) -> Unit = {}): String {
+    private suspend fun callOpenCodeServer(baseUrl: String, password: String, modelId: String, prompt: String, selectedProviderId: String? = null, userText: String = prompt, effort: String? = null, onStage: (String) -> Unit = {}): String {
         val root = baseUrl.trim().trimEnd('/')
         require(root.startsWith("https://") || root.startsWith("http://")) {
             "Адрес сервера должен начинаться с http:// или https://"
@@ -1610,7 +1776,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { workDir.mkdirs() }
         val dir = workDir.absolutePath
         val modelRef = JSONObject().put("providerID", providerId).put("id", modelId)
-        val agentName = openCodeAgentFor(prompt)
+        val agentName = openCodeAgentFor(userText)
         onStage(if (agentName == "chat") "Быстрый чат…" else "Агент с инструментами…")
         val sessionBody = JSONObject()
             .put("title", "YouCode Android")
@@ -1657,7 +1823,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val promptFailure = runCatching {
                 request(
                     "api/session/${enc(sessionId)}/prompt",
-                    JSONObject().put("text", withThinkingHint(prompt)),
+                    JSONObject().put("text", withThinkingHint(prompt, userText, effort)),
                     readTimeoutMs = 120000
                 )
             }.exceptionOrNull()
@@ -1670,7 +1836,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         "api/session/${enc(sessionId)}/message",
                         JSONObject()
                             .put("model", JSONObject().put("providerID", providerId).put("id", modelId))
-                            .put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", withThinkingHint(prompt)))),
+                            .put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", withThinkingHint(prompt, userText, effort)))),
                         readTimeoutMs = 30 * 60 * 1000
                     )
                     directAnswer = extractAssistantText(legacy)
