@@ -556,14 +556,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     .put(
                         "chat",
                         JSONObject()
-                            .put("description", "Conversation without tools")
+                            .put("description", "Fast chat without heavy tools")
                             .put("mode", "primary")
-                            .put(
-                                "permissions",
-                                JSONArray().put(
-                                    JSONObject().put("action", "*").put("resource", "*").put("effect", "deny")
-                                )
-                            )
                     )
             )
             .toString()
