@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import com.opencode.ai.MainActivity
 
 /**
@@ -20,8 +21,22 @@ class EngineService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private var wake: PowerManager.WakeLock? = null
+
+    /** Пока агент ждёт (sleep) с погашенным экраном, процессор не должен засыпать. */
+    private fun holdCpu() {
+        if (wake?.isHeld == true) return
+        wake = runCatching {
+            (getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "youcode:work")
+                .apply { acquire(3 * 60 * 60 * 1000L) }
+        }.getOrNull()
+    }
+
     override fun onDestroy() {
         active = false
+        runCatching { wake?.takeIf { it.isHeld }?.release() }
+        wake = null
         super.onDestroy()
     }
 
@@ -32,6 +47,7 @@ class EngineService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         ensureChannel()
+        holdCpu()
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)

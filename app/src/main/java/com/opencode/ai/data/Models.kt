@@ -28,13 +28,25 @@ data class AttachedFile(
         name.lowercase().let { it.endsWith(".png") || it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".webp") }
 }
 
+/** Шаг работы агента: размышление или вызов инструмента (как строки в консоли OpenCode). */
+data class ChatStep(
+    /** "reasoning" или "tool" */
+    val kind: String,
+    val title: String,
+    /** Текст размышления или вывод инструмента. */
+    val body: String = "",
+    /** "running", "done" или "error" */
+    val status: String = "done"
+)
+
 data class ChatMessage(
     val id: String,
     val content: String,
     val isUser: Boolean,
     val timestamp: Long = System.currentTimeMillis(),
     val modelName: String? = null,
-    val attachments: List<AttachedFile> = emptyList()
+    val attachments: List<AttachedFile> = emptyList(),
+    val steps: List<ChatStep> = emptyList()
 )
 
 data class ChatSession(

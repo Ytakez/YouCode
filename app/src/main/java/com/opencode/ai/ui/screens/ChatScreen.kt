@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import com.opencode.ai.ui.theme.entrance
 import com.opencode.ai.ui.theme.pressScale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.filled.Stop
@@ -84,6 +85,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Error
+import androidx.compose.ui.text.font.FontFamily
+import com.opencode.ai.data.ChatStep
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Image as OutlinedImageIcon
@@ -281,7 +286,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
     }
 
     // Keep the thinking block and newest messages in view; avoids the indicator covering a bubble.
-    LaunchedEffect(viewModel.messages.size, viewModel.isGenerating, viewModel.generationStatus, viewModel.generationActivities.size, viewModel.liveReasoning.length) {
+    LaunchedEffect(viewModel.messages.size, viewModel.isGenerating, viewModel.generationStatus, viewModel.generationActivities.size, viewModel.liveReasoning.length, viewModel.liveSteps.size) {
         if (viewModel.messages.isEmpty() && !viewModel.isGenerating) return@LaunchedEffect
         val target = (viewModel.messages.size - 1 + if (viewModel.isGenerating) 1 else 0).coerceAtLeast(0)
         // Если человек читает историю выше, ленту не дёргаем: иначе каждый статус возвращал вниз.
@@ -431,6 +436,8 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                                 activities = viewModel.generationActivities,
                                 reasoning = viewModel.liveReasoning,
                                 reasoningLive = viewModel.isReasoningLive,
+                                steps = viewModel.liveSteps,
+                                chars = viewModel.liveChars,
                                 elapsedSec = viewModel.generationElapsedSec,
                                 etaSec = viewModel.generationEtaSec,
                                 modifier = Modifier
@@ -1024,6 +1031,11 @@ private fun MessageBubble(
                     Spacer(Modifier.height(4.dp))
                 }
 
+                if (!isUser && message.steps.isNotEmpty()) {
+                    StepsColumn(message.steps)
+                    if (message.content.isNotBlank()) Spacer(Modifier.height(10.dp))
+                }
+
                 androidx.compose.foundation.text.selection.SelectionContainer {
                     Text(
                         message.content,
@@ -1163,6 +1175,8 @@ private fun GenerationActivity(
     activities: List<String>,
     reasoning: String = "",
     reasoningLive: Boolean = false,
+    steps: List<ChatStep> = emptyList(),
+    chars: Int = 0,
     elapsedSec: Int = 0,
     etaSec: Int? = null,
     modifier: Modifier = Modifier
@@ -1174,6 +1188,14 @@ private fun GenerationActivity(
         label = "activity_rotation"
     )
     var reasoningOpen by remember { mutableStateOf(false) }
+
+    // Сколько секунд идёт текущий шаг: сбрасывается, когда меняется последний шаг.
+    val lastSig = steps.lastOrNull()?.let { it.kind + it.title + it.status }.orEmpty()
+    var stepSince by remember { mutableStateOf(System.currentTimeMillis()) }
+    var tick by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(lastSig) { stepSince = System.currentTimeMillis() }
+    LaunchedEffect(Unit) { while (true) { delay(1000); tick = System.currentTimeMillis() } }
+    val stepSec = ((tick - stepSince) / 1000L).toInt().coerceAtLeast(0)
 
     Column(
         modifier = modifier
@@ -1198,11 +1220,7 @@ private fun GenerationActivity(
             }
             Column(Modifier.weight(1f, fill = false)) {
                 Text(
-                    when {
-                        reasoningLive || reasoning.isNotBlank() -> "Думает…"
-                        activities.any { it.contains("выполняется") } -> "Выполняет инструменты…"
-                        else -> "Работаю над запросом"
-                    },
+                    headlineFor(steps, reasoningLive, reasoning, activities),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold
@@ -1211,7 +1229,16 @@ private fun GenerationActivity(
                     append("прошло ")
                     append(elapsedSec)
                     append(" с")
-                    if (etaSec != null && etaSec > 0) {
+                    if (steps.isNotEmpty() && stepSec >= 5) {
+                        append(" · на шаге ")
+                        append(formatSeconds(stepSec))
+                    }
+                    if (chars > 0) {
+                        append(" · получено ")
+                        append(if (chars < 1000) "$chars симв." else "${"%.1f".format(chars / 1000.0)} тыс. симв.")
+                    }
+                    // «ещё ~N с» есть смысл только у коротких ответов: у агента с шагами он быстро становится ложным
+                    if (etaSec != null && etaSec > 0 && steps.isEmpty()) {
                         append(" · ещё ~")
                         append(etaSec)
                         append(" с")
@@ -1225,8 +1252,11 @@ private fun GenerationActivity(
             }
         }
 
+        // Шаги агента — строки как в консоли OpenCode: размышления и инструменты с выводом
+        if (steps.isNotEmpty()) StepsColumn(steps)
+
         // Блок рассуждений: можно раскрыть и читать
-        if (reasoning.isNotBlank()) {
+        if (steps.isEmpty() && reasoning.isNotBlank()) {
             Column {
                 Row(
                     modifier = Modifier
@@ -1282,7 +1312,7 @@ private fun GenerationActivity(
         }
 
         // Текущий статус
-        Surface(
+        if (steps.isEmpty()) Surface(
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             border = androidx.compose.foundation.BorderStroke(
@@ -1319,7 +1349,7 @@ private fun GenerationActivity(
         }
 
         // Инструменты — по строке, с id если есть
-        activities.takeLast(3).forEach { activity ->
+        (if (steps.isEmpty()) activities.takeLast(3) else emptyList()).forEach { activity ->
             val isError = activity.contains("ошибка", ignoreCase = true)
             val isDone = activity.contains("завершено", ignoreCase = true)
             Surface(
@@ -1366,12 +1396,106 @@ private fun GenerationActivity(
                 }
             }
         }
-        if (activities.isNotEmpty() || reasoning.isNotBlank()) {
+        if (steps.isEmpty() && (activities.isNotEmpty() || reasoning.isNotBlank())) {
             Text(
                 "Текущие действия",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
             )
+        }
+    }
+}
+
+private fun formatSeconds(s: Int): String = if (s < 60) "$s с" else "${s / 60} мин ${s % 60} с"
+
+/** Заголовок живого индикатора: что агент делает прямо сейчас. */
+private fun headlineFor(steps: List<ChatStep>, reasoningLive: Boolean, reasoning: String, activities: List<String>): String {
+    val last = steps.lastOrNull()
+    return when {
+        last != null && last.kind == "tool" && last.status == "running" -> last.title.take(70)
+        last != null && last.kind == "reasoning" && last.status == "running" -> "Думает…"
+        last != null -> "Модель пишет следующий шаг…"
+        reasoningLive || reasoning.isNotBlank() -> "Думает…"
+        activities.any { it.contains("выполняется") } -> "Выполняет инструменты…"
+        else -> "Работаю над запросом"
+    }
+}
+
+@Composable
+private fun StepsColumn(steps: List<ChatStep>) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        steps.forEach { step -> StepRow(step) }
+    }
+}
+
+/** Одна строка шага: ✓ / крутилка / ✗ и подпись; по нажатию раскрывается вывод инструмента или текст размышления. */
+@Composable
+private fun StepRow(step: ChatStep) {
+    var open by remember { mutableStateOf(false) }
+    val reasoning = step.kind == "reasoning"
+    val canOpen = step.body.isNotBlank()
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (reasoning) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.surfaceContainerLow,
+        border = if (reasoning) null else androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+        )
+    ) {
+        Column(
+            Modifier
+                .then(if (canOpen) Modifier.clickable { open = !open } else Modifier)
+                .padding(horizontal = if (reasoning) 2.dp else 11.dp, vertical = 8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                when {
+                    reasoning -> Icon(
+                        Icons.Outlined.Psychology, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp)
+                    )
+                    step.status == "running" -> CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp), strokeWidth = 2.dp
+                    )
+                    step.status == "error" -> Icon(
+                        Icons.Outlined.Error, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)
+                    )
+                    else -> Icon(
+                        Icons.Outlined.CheckCircle, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp)
+                    )
+                }
+                Text(
+                    step.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted,
+                    fontFamily = if (reasoning) null else FontFamily.Monospace,
+                    maxLines = if (open) 6 else 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (canOpen) {
+                    Icon(
+                        Icons.Default.ExpandMore, contentDescription = null, tint = muted,
+                        modifier = Modifier.size(16.dp).graphicsLayer { rotationZ = if (open) 180f else 0f }
+                    )
+                }
+            }
+            AnimatedVisibility(visible = open && canOpen) {
+                Text(
+                    step.body.trim().takeLast(2500),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted,
+                    fontFamily = if (reasoning) null else FontFamily.Monospace,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
         }
     }
 }

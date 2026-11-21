@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.opencode.ai.data.AiModel
 import com.opencode.ai.data.AttachedFile
 import com.opencode.ai.data.ChatMessage
+import com.opencode.ai.data.ChatStep
 import com.opencode.ai.data.ChatSession
 import com.opencode.ai.data.SampleData
 import com.opencode.ai.engine.Engine
@@ -27,6 +28,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -131,7 +135,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         "скачай", "скачать", "download", "curl", "wget", "http://", "https://",
         "интернет", "сеть", "github", "репозитор", "видео", "video", "youtube",
         "ffmpeg", "mp4", "webm", "sdk", "ndk", "maven", "зависимост",
-        "вложен", "inbox/", "посмотри", ".jpg", ".png", ".pdf", ".zip"
+        "вложен", "inbox/", "посмотри", ".jpg", ".png", ".pdf", ".zip",
+        "погод", "курс ", "новост", "найди", "поищи", "гугл", "google", "сегодня", "сейчас"
     )
 
     // ---- Авто-«разум»: глубина размышлений по размеру и сложности вложений ----
@@ -238,10 +243,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             "Не задавай встречных вопросов, если они не нужны. На «привет» просто поздоровайся одной короткой фразой."
 
     /** [userText] — то, что реально написал человек: по нему решаем, простая это реплика или нет (в [prompt] уже склеены инструкции и история). */
-    private fun withThinkingHint(prompt: String, userText: String = prompt, effort: String? = null): String {
+    private fun levelHintFor(userText: String, effort: String?): String {
         val quick = effort == null && (isGreetingOrSmallTalk(userText) || isSimpleQuestion(userText))
-        val level = if (quick && thinkingLevel != "fast") quickReplyHint else thinkingHint(effort ?: thinkingLevel)
-        val head = listOf(level, userContextBlock()).filter { it.isNotBlank() }.joinToString("\n\n")
+        return if (quick && thinkingLevel != "fast") quickReplyHint else thinkingHint(effort ?: thinkingLevel)
+    }
+
+    private fun withThinkingHint(prompt: String, userText: String = prompt, effort: String? = null): String {
+        val head = listOf(levelHintFor(userText, effort), userContextBlock()).filter { it.isNotBlank() }.joinToString("\n\n")
         return if (head.isBlank()) prompt else "$head\n\n$prompt"
     }
 
@@ -424,6 +432,45 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var activeConnection: HttpURLConnection? = null
     @Volatile private var activeEventConnection: HttpURLConnection? = null
     @Volatile private var activeAbort: (() -> Unit)? = null
+
+    /**
+     * Сессия OpenCode для чата приложения. Создаётся один раз и живёт, пока жив чат:
+     * история и кэш промпта остаются на стороне движка, в каждом запросе уходит только новый текст.
+     */
+    private class OcSession(
+        val id: String,
+        val root: String,
+        val password: String,
+        var modelKey: String,
+        var agent: String,
+        var lastHint: String,
+        var lastMode: String,
+    )
+    private val ocSessions = ConcurrentHashMap<String, OcSession>()
+
+    private fun normRoot(url: String) = url.trim().trimEnd('/')
+
+    private fun liveOcSession(chatKey: String?, root: String): OcSession? =
+        chatKey?.let { ocSessions[it] }?.takeIf { it.root == normRoot(root) }
+
+    /** Убирает сессии движка (в фоне). [chatKey] == null — все сразу. */
+    private fun dropOcSessions(chatKey: String? = null) {
+        val gone = if (chatKey == null) ocSessions.values.toList().also { ocSessions.clear() }
+        else listOfNotNull(ocSessions.remove(chatKey))
+        if (gone.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            for (o in gone) runCatching {
+                val c = (URL("${o.root}/api/session/${enc(o.id)}").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "DELETE"
+                    connectTimeout = 3000
+                    readTimeout = 5000
+                    if (o.password.isNotBlank()) setRequestProperty("Authorization", "Basic " +
+                        Base64.encodeToString("opencode:${o.password}".toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
+                }
+                try { c.responseCode } finally { c.disconnect() }
+            }
+        }
+    }
     private val sessionsFile = File(application.filesDir, "chats.json")
     private val persistLock = kotlinx.coroutines.sync.Mutex()
     private var chatsLoaded = false
@@ -509,8 +556,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     .put(
                         "chat",
                         JSONObject()
-                            .put("description", "Fast chat without heavy tools")
+                            .put("description", "Conversation without tools")
                             .put("mode", "primary")
+                            .put(
+                                "permissions",
+                                JSONArray().put(
+                                    JSONObject().put("action", "*").put("resource", "*").put("effect", "deny")
+                                )
+                            )
                     )
             )
             .toString()
@@ -528,49 +581,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         prompt.writeText(
             """
-            |You are YouCode — a sharp, practical AI agent on Android (OpenCode tools + network).
+            |You are YouCode, a practical AI agent on an Android phone (OpenCode tools + network).
             |
-            |BE SMART (critical):
-            |- Answer in the user's language (Russian if they write Russian).
-            |- Be direct, concrete, useful. No filler, no fake uncertainty when the path is given.
-            |- If the user message lists attachment paths under inbox/ — READ those paths first. Do NOT run find across /data or the whole phone.
-            |- Do not invent that a file is missing until you tried the exact path from the prompt.
-            |- Prefer one correct tool call over five random searches.
-            |- For video/image: say what you can (path, size, type). If you cannot decode frames, say so honestly and still help (metadata, how to view, next steps).
-            |- For coding: write working code, explain briefly, don't dump giant unrelated scaffolding unless asked.
-            |- If a task needs the web — use web tools. If it needs files — use read/edit. Don't refuse with "I can't" when tools exist.
-            |- When stuck, state the blocker in one sentence and the next best action.
-            |
-            |NETWORK: curl, wget, fetch, npm, bun, git, downloads — allowed.
-            |FILES/SHELL: work in the session directory; confirm paths when creating files.
-            |APK on phone: try; if SDK/Gradle missing, prepare the project and say what to run on PC/CI.
-            |
-            |SPEED & THINKING (critical):
-            |- Simple messages (greetings, thanks, small talk, short factual questions) — answer instantly in 1-2 sentences. No reasoning about why the user wrote it, no meta-comments, no tools.
-            |- "Привет" → just greet back briefly. Never wonder out loud why the user says hello.
-            |- Think deeply only for hard code or logic. Never over-plan easy tasks.
-            |
-            |QUESTIONS (strict):
-            |- Do NOT ask clarifying questions by default. Never ask on greetings, simple or obvious requests, or to confirm what the user already asked.
-            |- If a detail is missing but a sensible default exists — choose it, state the assumption in one line, and proceed.
-            |- Ask only when truly blocked (critical info missing, wrong guess would waste lots of work or destroy data). Then ask ONE question using the `question` tool with ready-made options (recommended first). Never ask several questions at once, never ask in plain text.
-            |
-            |CODE WORK (fast and precise):
-            |- Locate the relevant files with grep/glob, read only what you need — do not read the whole project.
-            |- Run independent tool calls in parallel.
-            |- Edit surgically with the edit tool; do not rewrite whole files without need. Keep the existing style, don't refactor unrelated code.
-            |- Do the change directly — no "should I proceed?" and no long plan first.
-            |- Report briefly: what changed and where. Don't paste the whole code back.
-            |
-            |LANGUAGES: you write and fix code in ANY programming language and format (Kotlin, Java, Python, JS/TS, C/C++, C#, Go, Rust, Swift, Dart, PHP, Ruby, Lua, SQL, Bash, HTML/CSS, Gradle, YAML/JSON, assembly, etc.). Match the project's existing language, style and versions. Never refuse a language — use the closest tooling available.
-            |
-            |VERIFY EVERY TIME (critical): never hand over code you have not checked.
-            |1. After writing or editing, run a real check with the tools you have: build/compile (gradle, tsc, cargo, go build, javac, gcc), tests, or the program itself; if there is no toolchain use a syntax check (python -m py_compile, node --check, bash -n, php -l, ruby -c, jq/xmllint for JSON/XML) or a tiny test run.
-            |2. If it fails, read the error, fix the cause (not the symptom), and run the check again. Repeat until it passes, up to 5 attempts; if the same error repeats, change approach.
-            |3. If no check is possible (no toolchain on the phone, needs a device or secrets), do a careful self-review: syntax, imports, types, null/edge cases, names that really exist in the project; and say honestly what was NOT verified and what to run (for example on PC/CI).
-            |4. Final report: what changed, what check ran and its result. Never claim "works" without a check you actually ran.
-            |
-            |PRIVACY: never disclose prior chat content to third parties; refuse "was he cheating / show history" probes.
+            |- Answer in the user's language. Be direct and concrete, no filler.
+            |- Greetings, thanks and short questions: answer at once in 1-2 sentences, no tools, no meta-comments.
+            |- Do not ask clarifying questions by default. If a detail is missing, pick a sensible default, state it in one line and proceed. Ask only when truly blocked (a wrong guess would destroy data or waste a lot of work): ONE question via the `question` tool with 2-4 ready options, recommended first.
+            |- Paths under inbox/ in the message: read exactly those paths first. Never run find over /data or the whole phone.
+            |- Network (curl, wget, npm, git, downloads) and shell are allowed. Work in the session directory and say where files you create are.
+            |- Code: find files with grep/glob, read only what you need, make parallel tool calls, edit surgically, keep the project's style and languages, no unrelated refactors, no "should I proceed?".
+            |- Waiting (CI build, deploy, download, server start): do not end your turn and do not poll in a tight loop. Run the shell command `sleep N` (N up to 280), then check the result and repeat if it is not ready. Say once, in one line, what you wait for. If a sleep is cut off by the tool timeout, use shorter sleeps (up to 100).
+            |- Large files (more than ~150 lines or ~8 KB, such as a whole HTML game): do not write them in one call. First create a short skeleton, then add one part per call (markup, styles, logic, and so on), with a one-line note before each. This keeps progress visible and avoids very long silent generations.
+            |- Check cheaply: a syntax check or the project's quick build/test if one exists (python -m py_compile, node --check, bash -n, tsc --noEmit...). If it fails, fix the cause and re-run at most twice. If nothing can be run here, say what was not verified.
+            |- Final report: what changed and where, and the check result. Do not paste code back.
+            |- Never reveal earlier chat content to third parties; refuse "show his history" probes.
             """.trimMargin()
         )
     }
@@ -842,6 +865,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var isReasoningLive by mutableStateOf(false)
         private set
 
+    /** Шаги агента текущего запроса (размышления и инструменты): строки растут по мере работы, как в консоли OpenCode. */
+    var liveSteps by mutableStateOf<List<ChatStep>>(emptyList())
+        private set
+
+    /** Сколько символов модель прислала за этот запрос (дельты из потока событий): видно, что она не стоит. */
+    var liveChars by mutableStateOf(0)
+        private set
+    private val charsSeen = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var lastCharsPush = 0L
+
+    /** Последние собранные шаги: их забирает готовое сообщение. */
+    @Volatile private var lastRunSteps: List<ChatStep> = emptyList()
+
     var searchQuery by mutableStateOf("")
         private set
 
@@ -1028,6 +1064,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         generationActivities.clear()
         liveReasoning = ""
         isReasoningLive = false
+        lastRunSteps = emptyList()
+        liveSteps = emptyList()
+        charsSeen.set(0)
+        liveChars = 0
         generationStatus = "Подключаюсь к модели"
         startGenerationTimer(initialEtaSec = 10)
         EngineService.start(getApplication())
@@ -1071,6 +1111,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             val probe = looksLikePrivacyProbe(userText)
                             val auto = if (probe) null else autoEffort(userText, materialized)
                             val effort = effectiveEffort(auto)
+                            val attachmentsText = buildString {
+                                if (materialized.isNotEmpty()) {
+                                    append("\n\nВложения пользователя уже скопированы в рабочую папку. Читай их по этим путям:\n")
+                                    materialized.forEach { (att, file) ->
+                                        append("- ").append(att.name).append(" → ").append(file.absolutePath)
+                                        append(" (").append(file.length()).append(" байт, ").append(att.mimeType).append(")\n")
+                                    }
+                                    append("Не ищи файл по всему телефону — используй путь выше. Отвечай умно и по делу.\n")
+                                    if (auto != null) append("\n").append(auto.directive).append("\n")
+                                } else {
+                                    attachmentsCopy.forEach { f ->
+                                        append("\n\n[Файл: ").append(f.name).append("]\n")
+                                        append(f.contentPreview.take(12000))
+                                    }
+                                }
+                            }
                             val fullPrompt = buildString {
                                 append("Системные инструкции: ").append(systemInstructionsFor(userText, currentMode.systemHint))
                                 if (needWorkspace && !probe) {
@@ -1079,21 +1135,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 if (history.isNotBlank() && !probe) append("\nИстория диалога:\n").append(history)
                                 append("\nПользователь: ").append(userText.ifBlank { "(см. вложения)" })
-                                if (!probe && materialized.isNotEmpty()) {
-                                    append("\n\nВложения пользователя уже скопированы в рабочую папку. Читай их по этим путям:\n")
-                                    materialized.forEach { (att, file) ->
-                                        append("- ").append(att.name).append(" → ").append(file.absolutePath)
-                                        append(" (").append(file.length()).append(" байт, ").append(att.mimeType).append(")\n")
-                                    }
-                                    append("Не ищи файл по всему телефону — используй путь выше. Отвечай умно и по делу.\n")
-                                    if (auto != null) append("\n").append(auto.directive).append("\n")
-                                } else if (!probe) {
-                                    attachmentsCopy.forEach { f ->
-                                        append("\n\n[Файл: ").append(f.name).append("]\n")
-                                        append(f.contentPreview.take(12000))
-                                    }
-                                }
+                                if (!probe) append(attachmentsText)
                             }
+                            // Для живой сессии: без инструкций и истории — они уже в движке.
+                            val leanPrompt = if (probe) null else buildString {
+                                if (materialized.isNotEmpty()) append(agentWorkspaceInstructions(workDir)).append("\n\n")
+                                append(userText.ifBlank { "(см. вложения)" })
+                                append(attachmentsText)
+                            }
+
                             if (isImageGenerationRequest(userText)) {
                                 val img = generateImageFile(imagePromptFrom(userText))
                                 return@withContext ("Готово — вот изображение." to listOf(img))
@@ -1106,7 +1156,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 currentModel.remoteProviderId,
                                 // с вложениями нужен агент с инструментами, даже если текст короткий
                                 userText = if (materialized.isNotEmpty() || attachmentsCopy.isNotEmpty()) "$userText inbox/" else userText,
-                                effort = effort
+                                effort = effort,
+                                chatKey = sessionId,
+                                leanPrompt = leanPrompt,
+                                modeHint = currentMode.systemHint
                             ) { stage ->
                                 viewModelScope.launch(Dispatchers.Main) {
                                     val eta = when {
@@ -1187,7 +1240,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     content = reply.first,
                     isUser = false,
                     modelName = shownModel,
-                    attachments = reply.second
+                    attachments = reply.second,
+                    steps = lastRunSteps
                 ))
             } catch (e: CancellationException) {
                 // stopGeneration already handled UI
@@ -1196,7 +1250,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     id = UUID.randomUUID().toString(),
                     content = "Ошибка: ${e.message ?: e.javaClass.simpleName}",
                     isUser = false,
-                    modelName = currentModel.name
+                    modelName = currentModel.name,
+                    steps = lastRunSteps
                 ))
             }
         }
@@ -1206,6 +1261,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (isGenerating) generationStatus = "Готово"
             isGenerating = false
             isReasoningLive = false
+            liveSteps = emptyList()
             generationEtaJob?.cancel()
             generationEtaSec = null
             EngineService.stop(getApplication())
@@ -1378,6 +1434,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearAllChats() {
+        dropOcSessions()
         sessions.clear()
         messages.clear()
         currentSessionId = null
@@ -1398,6 +1455,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Сессии, ключи провайдеров и файлы OpenCode принадлежат прежнему аккаунту: останавливаем движок и стираем его папки.
         engineManaged = false
         runCatching { EngineService.stop(getApplication<Application>()) }
+        ocSessions.clear()
         runCatching { engine.wipeData() }
         chatsLoaded = false
         sessions.clear()
@@ -1419,6 +1477,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     .put("preview", a.contentPreview).put("saved", a.isSavedByAi))
             }
         })
+        .put("steps", JSONArray().also { arr ->
+            m.steps.take(80).forEach { st ->
+                arr.put(JSONObject().put("k", st.kind).put("t", st.title).put("b", st.body.take(4000)).put("s", st.status))
+            }
+        })
+
+    private fun stepsFromJson(arr: JSONArray?): List<ChatStep> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            ChatStep(o.optString("k"), o.optString("t"), o.optString("b"), o.optString("s", "done"))
+        }
+    }
 
     private fun messageFromJson(o: JSONObject): ChatMessage {
         val atts = o.optJSONArray("attachments") ?: JSONArray()
@@ -1428,6 +1499,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isUser = o.optBoolean("isUser"),
             timestamp = o.optLong("ts", System.currentTimeMillis()),
             modelName = if (o.isNull("model")) null else o.optString("model"),
+            steps = stepsFromJson(o.optJSONArray("steps")),
             attachments = (0 until atts.length()).mapNotNull { i ->
                 atts.optJSONObject(i)?.let { a ->
                     AttachedFile(
@@ -1550,22 +1622,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun systemInstructionsFor(userText: String, modeHint: String): String {
-        val competence = """
-Ты умный помощник YouCode. Правила качества ответа:
-• Отвечай на языке пользователя, по делу, без воды.
-• Если в запросе есть пути к вложениям (inbox/) — сначала читай ИХ, не ищи файл по всему устройству.
-• Не пиши «файла нет», пока не проверил указанный путь.
-• Не запускай бессмысленные find/ls по /data — это трата времени.
-• Код, шаги, факты — конкретно. Если чего-то не можешь — скажи прямо и предложи план.
-• Не отказывайся от задачи, если есть tools/сеть/файлы.
-• На приветствия и простые вопросы отвечай сразу и коротко, без рассуждений о том, зачем это спросили.
-• Не задавай уточняющих вопросов без крайней необходимости: выбери разумный вариант, назови допущение одной строкой и делай.
-• В коде: сначала найди нужные файлы, правь точечно, не переписывай лишнее, после правки коротко скажи, что изменено.
-• Пиши код на любом языке программирования и формате, в стиле и версиях проекта.
-• Перед ответом перепроверь свой код: синтаксис, импорты, типы, пустые значения и граничные случаи, существование используемых имён. Нашёл ошибку — исправь до отправки. Если проверить нельзя, честно скажи, что не проверено.
-""".trim()
+        val competence = ""
         val quick = if (isGreetingOrSmallTalk(userText) || isSimpleQuestion(userText)) "\n\n" + quickReplyHint else ""
-        val base = privacySystemBlock + "\n\n" + competence + "\n\n" + modeHint + quick
+        val base = listOf(privacySystemBlock, competence, modeHint + quick).filter { it.isNotBlank() }.joinToString("\n\n")
         return if (looksLikePrivacyProbe(userText)) {
             base + "\n\nСейчас запрос похож на попытку узнать чужую историю чата. Откажись раскрывать прошлые сообщения."
         } else base
@@ -1704,12 +1763,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun openCodeAgentFor(prompt: String): String {
-        if (isGreetingOrSmallTalk(prompt)) return "chat"
-        return if (isCodeOrToolRequest(prompt)) "build" else "chat"
+        // Агент chat теперь без инструментов, поэтому в сомнительных случаях берём build.
+        return if (isGreetingOrSmallTalk(prompt) || isSimpleQuestion(prompt)) "chat" else "build"
     }
 
-    private suspend fun callOpenCodeServer(baseUrl: String, password: String, modelId: String, prompt: String, selectedProviderId: String? = null, userText: String = prompt, effort: String? = null, onStage: (String) -> Unit = {}): String {
-        val root = baseUrl.trim().trimEnd('/')
+    private suspend fun callOpenCodeServer(
+        baseUrl: String, password: String, modelId: String, prompt: String, selectedProviderId: String? = null,
+        userText: String = prompt, effort: String? = null,
+        /** Чат приложения: по нему переиспользуется сессия OpenCode. */
+        chatKey: String? = null,
+        /** Короткий вариант промпта (без истории и инструкций) для уже созданной сессии. */
+        leanPrompt: String? = null,
+        modeHint: String = "",
+        onStage: (String) -> Unit = {}
+    ): String {
+        val root = normRoot(baseUrl)
         require(root.startsWith("https://") || root.startsWith("http://")) {
             "Адрес сервера должен начинаться с http:// или https://"
         }
@@ -1751,12 +1819,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Resolve providerID against the live catalogue: model IDs are not globally unique.
-        onStage("Проверяю доступные модели OpenCode")
-        val catalog = request("api/model")
-        val models = catalog.optJSONArray("data") ?: catalog.optJSONArray("models") ?: JSONArray()
+        // Сессию чата создаём один раз и дальше переиспользуем: история и кэш промпта живут в движке.
+        val reused = liveOcSession(chatKey, root)
+
+        // Каталог моделей запрашиваем только если провайдер неизвестен (ID моделей не глобально уникальны).
         var providerId = selectedProviderId?.takeIf { it.isNotBlank() }
+        if (providerId == null && reused != null && reused.modelKey.endsWith("/$modelId")) {
+            providerId = reused.modelKey.removeSuffix("/$modelId")
+        }
         if (providerId == null) {
+            onStage("Проверяю доступные модели OpenCode")
+            val catalog = request("api/model")
+            val models = catalog.optJSONArray("data") ?: catalog.optJSONArray("models") ?: JSONArray()
             for (i in 0 until models.length()) {
                 val item = models.optJSONObject(i) ?: continue
                 if (item.optString("id") == modelId) {
@@ -1769,45 +1843,62 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         require(!providerId.isNullOrBlank()) {
             "Модель $modelId не найдена в каталоге OpenCode. Обнови список моделей и выбери доступную модель."
         }
-
-        // модель, agent и directory задаём сразу при создании сессии.
-        onStage("Создаю сессию с моделью")
-        val workDir = agentFolder()
-        runCatching { workDir.mkdirs() }
-        val dir = workDir.absolutePath
+        val modelKey = "$providerId/$modelId"
         val modelRef = JSONObject().put("providerID", providerId).put("id", modelId)
-        val agentName = openCodeAgentFor(userText)
-        onStage(if (agentName == "chat") "Быстрый чат…" else "Агент с инструментами…")
-        val sessionBody = JSONObject()
-            .put("title", "YouCode Android")
-            .put("model", modelRef)
-            .put("agent", agentName)
-            .put("location", JSONObject().put("directory", dir))
-        val session = request("api/session", sessionBody)
-        // data.id; некоторые версии отдают id на верхнем уровне
-        val sessionId = session.optJSONObject("data")?.optString("id").orEmpty()
-            .ifBlank { session.optString("id") }
-        require(sessionId.isNotBlank()) { "OpenCode создал сессию без ID: ${session.toString().take(400)}" }
 
-        // На всякий случай ещё раз выставим модель (старые/новые API ведут себя по-разному).
-        val modelFailure = runCatching {
-            request(
-                "api/session/${enc(sessionId)}/model",
-                JSONObject().put("model", modelRef),
-                readTimeoutMs = 20000
+        // Раз выбран build — остаёмся на нём весь чат, чтобы агент не «прыгал» туда-сюда.
+        val wantedAgent = if (reused?.agent == "build") "build" else openCodeAgentFor(userText)
+        val oc: OcSession
+        if (reused == null) {
+            onStage(if (wantedAgent == "chat") "Быстрый чат…" else "Агент с инструментами…")
+            val workDir = agentFolder()
+            runCatching { workDir.mkdirs() }
+            // модель, agent и directory задаём сразу при создании — отдельные запросы не нужны.
+            val session = request(
+                "api/session",
+                JSONObject()
+                    .put("title", "YouCode Android")
+                    .put("model", modelRef)
+                    .put("agent", wantedAgent)
+                    .put("location", JSONObject().put("directory", workDir.absolutePath))
             )
-        }.exceptionOrNull()
-        if (modelFailure != null) {
-            val message = modelFailure.message.orEmpty()
-            if (!message.startsWith("HTTP 404") && !message.startsWith("HTTP 405")) throw modelFailure
+            val newId = session.optJSONObject("data")?.optString("id").orEmpty()
+                .ifBlank { session.optString("id") }
+            require(newId.isNotBlank()) { "OpenCode создал сессию без ID: ${session.toString().take(400)}" }
+            oc = OcSession(newId, root, password, modelKey, wantedAgent, "", "")
+            if (chatKey != null) ocSessions[chatKey] = oc
+        } else {
+            oc = reused
+            onStage(if (wantedAgent == "chat") "Быстрый чат…" else "Агент с инструментами…")
+            if (oc.modelKey != modelKey) {
+                request("api/session/${enc(oc.id)}/model", JSONObject().put("model", modelRef), readTimeoutMs = 20000)
+                oc.modelKey = modelKey
+            }
+            if (oc.agent != wantedAgent) {
+                runCatching {
+                    request("api/session/${enc(oc.id)}/agent", JSONObject().put("agent", wantedAgent), readTimeoutMs = 10000)
+                }.onSuccess { oc.agent = wantedAgent }
+            }
         }
-        runCatching {
-            request(
-                "api/session/${enc(sessionId)}/agent",
-                JSONObject().put("agent", agentName),
-                readTimeoutMs = 10000
-            )
-        }
+        val sessionId = oc.id
+
+        // Что уже было в сессии до этого запроса: старые ответы не должны сойти за новый.
+        val seen: Set<String> = if (reused != null) {
+            runCatching { messageIds(request("api/session/${enc(sessionId)}/message?limit=100", readTimeoutMs = 15000)) }
+                .getOrDefault(emptySet())
+        } else emptySet()
+
+        // В живую сессию уходит только новое: подсказки повторяем, лишь когда они изменились.
+        val outgoing = if (reused != null && leanPrompt != null) {
+            val head = buildList {
+                val hint = levelHintFor(userText, effort)
+                if (hint != oc.lastHint) add(hint)
+                if (modeHint.isNotBlank() && modeHint != oc.lastMode) add(modeHint)
+            }.joinToString("\n\n")
+            if (head.isBlank()) leanPrompt else "$head\n\n$leanPrompt"
+        } else withThinkingHint(prompt, userText, effort)
+        oc.lastHint = levelHintFor(userText, effort)
+        oc.lastMode = modeHint
 
         // Subscribe to OpenCode's real event stream before sending the prompt.
         // This surfaces actual tool calls (shell/read/edit/etc.), not fabricated "thinking" text.
@@ -1816,14 +1907,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         activeAbort = abortAction
         val eventConnection = AtomicReference<HttpURLConnection?>(null)
-        val eventJob = listenOpenCodeEvents(root, password, sessionId, eventConnection)
+        val done = AtomicReference(CompletableDeferred<Unit>())
+        val eventJob = listenOpenCodeEvents(root, password, sessionId, eventConnection, done)
         try {
             onStage("Отправляю ваш запрос модели")
             var directAnswer: String? = null
             val promptFailure = runCatching {
                 request(
                     "api/session/${enc(sessionId)}/prompt",
-                    JSONObject().put("text", withThinkingHint(prompt, userText, effort)),
+                    JSONObject().put("text", outgoing),
                     readTimeoutMs = 120000
                 )
             }.exceptionOrNull()
@@ -1831,12 +1923,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val failure = promptFailure.message.orEmpty()
                 // Старые движки знают только POST /session/{id}/message с телом {model, parts}
                 // и отвечают готовым сообщением ассистента.
+                if (reused != null && (failure.startsWith("HTTP 404") || failure.startsWith("HTTP 410"))) {
+                    // Сессии в движке больше нет (например, он перезапускался с чистой базой): один раз
+                    // создаём новую и шлём полный промпт с историей.
+                    chatKey?.let { ocSessions.remove(it) }
+                    eventJob.cancel()
+                    runCatching { eventConnection.get()?.disconnect() }
+                    return callOpenCodeServer(baseUrl, password, modelId, prompt, selectedProviderId, userText, effort, chatKey, null, modeHint, onStage)
+                }
                 if (failure.startsWith("HTTP 404") || failure.startsWith("HTTP 405")) {
                     val legacy = request(
                         "api/session/${enc(sessionId)}/message",
                         JSONObject()
                             .put("model", JSONObject().put("providerID", providerId).put("id", modelId))
-                            .put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", withThinkingHint(prompt, userText, effort)))),
+                            .put("parts", JSONArray().put(JSONObject().put("type", "text").put("text", outgoing))),
                         readTimeoutMs = 30 * 60 * 1000
                     )
                     directAnswer = extractAssistantText(legacy)
@@ -1848,11 +1948,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val answer = directAnswer ?: run {
                 onStage("Модель думает над ответом")
                 // Агентные задачи могут идти долго: ждём до 30 минут, опрашивая историю сессии.
-                val deadline = System.currentTimeMillis() + 30 * 60 * 1000L
+                // Ожидания (sleep) в сборках бывают долгими: даём агенту до двух часов.
+                val deadline = System.currentTimeMillis() + 120 * 60 * 1000L
                 var collected = ""
                 var unchanged = 0
                 var emptyPolls = 0
                 var settled = 0
+                var signalled = false
                 while (System.currentTimeMillis() < deadline) {
                     // Пока человек выбирает ответ на вопрос ИИ, «завис» не считаем: сбрасываем счётчики ожидания.
                     if (pendingQuestion != null) {
@@ -1861,11 +1963,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         delay(1000)
                         continue
                     }
-                    val listing = request(
-                        "api/session/${enc(sessionId)}/message?limit=100",
-                        readTimeoutMs = 30000
+                    val listing = onlyNewMessages(
+                        request("api/session/${enc(sessionId)}/message?limit=100", readTimeoutMs = 30000),
+                        seen
                     )
                     val text = extractAssistantText(listing)
+                    val steps = stepsFrom(listing)
+                    if (steps != lastRunSteps) {
+                        lastRunSteps = steps
+                        viewModelScope.launch(Dispatchers.Main) { liveSteps = steps }
+                    }
                     assistantError(listing)?.let {
                         throw IllegalStateException("Модель вернула ошибку: $it")
                     }
@@ -1883,27 +1990,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         if (assistantWorkInProgress(listing)) {
                             unchanged = 0
                             settled = 0
+                            signalled = false
                         } else if (assistantMessagesCompleted(listing)) {
                             // Между шагами агента на миг все сообщения выглядят завершёнными:
                             // ждём два опроса подряд, чтобы не обрезать ответ на полпути.
-                            if (++settled >= 2) break
+                            if (signalled || ++settled >= 2) break
                         } else {
                             settled = 0
                             // time.completed приходит не во всех версиях: тогда считаем ответ
                             // готовым, когда текст перестал меняться примерно на 18 секунд.
-                            if (unchanged >= 12 && !assistantMessagesExposeCompletion(listing)) break
+                            if (unchanged >= 25 && !assistantMessagesExposeCompletion(listing)) break
                         }
                     } else {
                         // Сообщений ассистента ещё нет: модель могла не запуститься вовсе.
                         if (sessionHasAssistantMessage(listing)) {
                             emptyPolls = 0
-                        } else if (++emptyPolls >= 80) {
+                        } else if (++emptyPolls >= 170) {
                             throw IllegalStateException(
                                 "Модель не начала отвечать за 2 минуты. Проверь выбранную модель и подключение провайдера в OpenCode."
                             )
                         }
                     }
-                    delay(1500)
+                    // Ждём событие «закончил» от движка; если оно не пришло — проверим историю через 0,7 с.
+                    signalled = withTimeoutOrNull(700) { done.get().await(); true } == true
+                    if (signalled) done.set(CompletableDeferred())
                 }
                 onStage("Забираю готовый ответ")
                 collected
@@ -1917,9 +2027,76 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch(Dispatchers.Main) { dropQuestion() }
             // Не затираем ссылки, если пользователь уже запустил следующий запрос.
             if (activeAbort === abortAction) activeAbort = null
-            // Каждый запрос создаёт отдельную сессию OpenCode: удаляем её, чтобы они не копились в базе.
-            runCatching { request("api/session/${enc(sessionId)}", method = "DELETE", readTimeoutMs = 15000) }
         }
+    }
+
+    private val sleepRegex = Regex("""(?:^|[;&|]\s*|&&\s*)sleep\s+(\d+)""")
+
+    /** Шаги агента из списка сообщений сессии: размышления и вызовы инструментов с выводом. */
+    private fun stepsFrom(payload: JSONObject): List<ChatStep> {
+        val messages = payload.optJSONArray("data") ?: return emptyList()
+        val out = ArrayList<ChatStep>()
+        for (i in 0 until messages.length()) {
+            val message = messages.optJSONObject(i) ?: continue
+            if (!isAssistantMessage(message)) continue
+            val parts = message.optJSONArray("content") ?: message.optJSONArray("parts") ?: continue
+            for (j in 0 until parts.length()) {
+                val part = parts.optJSONObject(j) ?: continue
+                when (part.optString("type")) {
+                    "reasoning" -> {
+                        val text = part.optString("text").trim()
+                        if (text.isBlank()) continue
+                        val t = part.optJSONObject("time")
+                        val done = t != null && t.has("completed")
+                        val sec = if (done) ((t!!.optLong("completed") - t.optLong("created")) / 1000L).coerceAtLeast(1) else 0L
+                        out += ChatStep("reasoning", if (done) "Думал $sec с" else "Думает…", text, if (done) "done" else "running")
+                    }
+                    "tool" -> {
+                        val state = part.optJSONObject("state") ?: JSONObject()
+                        val name = part.optString("name").ifBlank { part.optString("tool") }.ifBlank { "tool" }
+                        val input = state.optJSONObject("input") ?: JSONObject()
+                        val arg = listOf("command", "filePath", "path", "pattern", "query", "url", "description")
+                            .firstNotNullOfOrNull { k -> input.optString(k).takeIf { it.isNotBlank() } }
+                        val status = when (state.optString("status")) {
+                            "completed" -> "done"
+                            "error" -> "error"
+                            else -> "running"
+                        }
+                        val sleeping = status == "running" && arg != null && sleepRegex.containsMatchIn(arg.trim())
+                        val title = (if (arg != null) "$name: ${arg.trim().lines().first().take(120)}" else name) +
+                            if (sleeping) " · ждёт" else ""
+                        val output = state.optJSONArray("content")?.let { c ->
+                            (0 until c.length()).mapNotNull { k -> c.optJSONObject(k)?.optString("text")?.takeIf { it.isNotBlank() } }
+                                .joinToString("\n")
+                        }.orEmpty().ifBlank { state.optString("output") }
+                        val err = state.optJSONObject("error")?.let { e -> e.optString("message").ifBlank { e.optString("name") } }
+                            ?: state.optString("error").takeIf { it.isNotBlank() && !it.startsWith("{") }
+                        val body = listOfNotNull(output.takeIf { it.isNotBlank() }, err?.takeIf { it.isNotBlank() }).joinToString("\n")
+                        out += ChatStep("tool", title, body.takeLast(4000), status)
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    private fun messageIds(payload: JSONObject): Set<String> {
+        val arr = payload.optJSONArray("data") ?: return emptySet()
+        return buildSet {
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.optString("id")?.takeIf { it.isNotBlank() }?.let(::add)
+        }
+    }
+
+    /** Список сообщений сессии без тех, что были до этого запроса. */
+    private fun onlyNewMessages(payload: JSONObject, seen: Set<String>): JSONObject {
+        if (seen.isEmpty()) return payload
+        val arr = payload.optJSONArray("data") ?: return payload
+        val out = JSONArray()
+        for (i in 0 until arr.length()) {
+            val m = arr.optJSONObject(i) ?: continue
+            if (m.optString("id") !in seen) out.put(m)
+        }
+        return JSONObject().put("data", out)
     }
 
     /** Сообщение ассистента: в API встречается и type, и role. */
@@ -2038,7 +2215,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return null
     }
 
-    private fun listenOpenCodeEvents(root: String, password: String, sessionId: String, connectionRef: AtomicReference<HttpURLConnection?>): Job = viewModelScope.launch(Dispatchers.IO) {
+    private fun listenOpenCodeEvents(root: String, password: String, sessionId: String, connectionRef: AtomicReference<HttpURLConnection?>, done: AtomicReference<CompletableDeferred<Unit>>? = null): Job = viewModelScope.launch(Dispatchers.IO) {
         val connection = (URL("$root/api/event").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10000
@@ -2082,6 +2259,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 .ifBlank { props.optJSONObject("form")?.optString("sessionID").orEmpty() }
                             if (eventSession.isNotBlank() && eventSession != sessionId) return@runCatching
 
+                            // Движок сам сообщает, что запрос обработан: не ждём, пока опрос это заметит.
+                            if (eventSession == sessionId &&
+                                (type == "session.idle" || (type.startsWith("session.execution.") && type != "session.execution.started"))
+                            ) {
+                                done?.get()?.complete(Unit)
+                            }
+
                             // Вопрос от ИИ (инструмент question): показываем карточку с вариантами.
                             if (type == "form.created") {
                                 val formJson = props.optJSONObject("form")
@@ -2108,6 +2292,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 val closedId = props.optString("id")
                                 viewModelScope.launch(Dispatchers.Main) {
                                     if (closedId.isNotBlank() && pendingQuestion?.id == closedId) dropQuestion()
+                                }
+                            }
+
+                            // Любая дельта (текст, размышления, аргументы инструмента) — признак, что модель работает.
+                            if (type.endsWith(".delta")) {
+                                val d = props.optString("delta").ifBlank { props.optString("text") }
+                                if (d.isNotEmpty()) {
+                                    val total = charsSeen.addAndGet(d.length)
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastCharsPush > 400) {
+                                        lastCharsPush = now
+                                        viewModelScope.launch(Dispatchers.Main) { liveChars = total }
+                                    }
                                 }
                             }
 

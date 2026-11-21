@@ -79,6 +79,8 @@ class Engine(private val context: Context) {
             // Разрешаем node/bun/npm кэши в home приложения
             "npm_config_cache" to File(home, ".npm").absolutePath,
             "BUN_INSTALL" to File(home, ".bun").absolutePath,
+            // Агент ждёт сборки и загрузки командой `sleep N`: не обрываем долгие команды через пару минут.
+            "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS" to "900000",
         )
     }
 
