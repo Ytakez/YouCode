@@ -296,9 +296,18 @@ val openTreeLauncher = rememberLauncherForActivityResult(
         if (nearBottom) listState.animateScrollToItem(target)
     }
 
+    // Адаптация под экран: маленький экран или крупный системный шрифт -> компактный вид,
+    // планшет/складной (от 600dp) -> содержимое по центру, не растянутое на весь экран.
+    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    val systemFontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    val isCompact = screenWidthDp / systemFontScale.coerceAtLeast(1f) < 330f
+    val isWide = screenWidthDp >= 600
+
     Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
+            .align(Alignment.TopCenter)
+            .widthIn(max = 840.dp)
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
@@ -312,7 +321,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = if (isCompact) 4.dp else 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onMenuClick) {
@@ -328,7 +337,9 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                         "YouCode",
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                     Text(
                         when (viewModel.engineState) {
@@ -339,7 +350,9 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = if (viewModel.engineState == "error") MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -352,7 +365,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                 )
                 Surface(
                     onClick = onModelClick,
-                    modifier = Modifier.pressScale(0.94f),
+                    modifier = Modifier.widthIn(max = if (isCompact) 128.dp else if (isWide) 280.dp else 170.dp).pressScale(0.94f),
                     shape = RoundedCornerShape(26.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     border = androidx.compose.foundation.BorderStroke(
@@ -376,6 +389,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                         )
                         Spacer(Modifier.width(7.dp))
                         AnimatedContent(
+                            modifier = Modifier.weight(1f, fill = false),
                             targetState = if (viewModel.isOpenCodeLoading) viewModel.openCodeLoadingLabel.ifBlank { "OpenCode…" } else viewModel.currentModel.name,
                             transitionSpec = {
                                 (fadeIn(tween(220)) + slideInVertically(spring(stiffness = 500f)) { it / 2 }) togetherWith
@@ -609,6 +623,11 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                         }
                     }
 
+                    // Чипы (режим мышления + папка) делят оставшееся место, кнопка отправки всегда остаётся на экране
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                     // Режим мышления (как «Fast» в Claude): как глубоко думает ИИ
                     var showThinkingMenu by remember { mutableStateOf(false) }
                     val level = thinkingLevels.firstOrNull { it.id == viewModel.thinkingLevel } ?: thinkingLevels[1]
@@ -627,12 +646,15 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(level.icon, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Text(
-                                    level.title,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    maxLines = 1,
-                                    modifier = Modifier.padding(start = 6.dp)
-                                )
+                                if (!isCompact) {
+                                    Text(
+                                        level.title,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false).padding(start = 6.dp)
+                                    )
+                                }
                                 Icon(
                                     Icons.Default.ExpandMore,
                                     contentDescription = "Режим мышления",
@@ -684,6 +706,7 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                         else Color.Transparent,
                         shape = RoundedCornerShape(22.dp),
                         modifier = Modifier
+                            .weight(1f, fill = false)
                             .clip(RoundedCornerShape(22.dp))
                             .clickable { showFolderDialog = true }
                     ) {
@@ -697,21 +720,22 @@ val openTreeLauncher = rememberLauncherForActivityResult(
                                 modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            viewModel.workingFolderName?.let { folderName ->
+                            viewModel.workingFolderName?.takeIf { !isCompact }?.let { folderName ->
                                 Text(
                                     folderName,
                                     style = MaterialTheme.typography.labelLarge,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier
+                                        .weight(1f, fill = false)
                                         .padding(start = 6.dp)
-                                        .widthIn(max = 90.dp)
+                                        .widthIn(max = if (isWide) 200.dp else 90.dp)
                                 )
                             }
                         }
                     }
 
-                    Spacer(Modifier.weight(1f))
+                    } // конец группы чипов
 
                     val sendScale by animateFloatAsState(
                         targetValue = if (canSend) 1f else 0.92f,
