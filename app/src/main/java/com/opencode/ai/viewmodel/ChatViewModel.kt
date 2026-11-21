@@ -1951,6 +1951,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 var signalled = false
                 var lastSig = ""
                 var lastChangeAt = System.currentTimeMillis()
+                var busyPolls = 0
+                var sawBusy = false
+                var idlePolls = 0
                 while (System.currentTimeMillis() < deadline) {
                     // Пока человек выбирает ответ на вопрос ИИ, «завис» не считаем: сбрасываем счётчики ожидания.
                     if (pendingQuestion != null) {
@@ -1984,6 +1987,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     ) {
                         runCatching { abortAction() }
                         break
+                    }
+                    // Движок сам сообщает «выполнение закончено» (session.idle / session.execution.*).
+                    // Верим ему, даже если итогового текста нет (агент мог закончить записью файла).
+                    if (signalled && (steps.isNotEmpty() || text.isNotBlank() || sessionHasAssistantMessage(listing))) {
+                        if (text.isNotBlank()) collected = text
+                        break
+                    }
+                    // Запасной путь, если событие потерялось: флаг занятости сессии на сервере (time.busy > time.idle).
+                    if (++busyPolls >= 5) {
+                        busyPolls = 0
+                        val busyNow: Boolean? = runCatching {
+                            val arr = request("api/session", readTimeoutMs = 10000).optJSONArray("data")
+                            var found: Boolean? = null
+                            if (arr != null) {
+                                for (k in 0 until arr.length()) {
+                                    val o = arr.optJSONObject(k) ?: continue
+                                    if (o.optString("id") != sessionId) continue
+                                    val t = o.optJSONObject("time")
+                                    val b = t?.optLong("busy") ?: 0L
+                                    val i = t?.optLong("idle") ?: 0L
+                                    found = b > 0 && b > i
+                                }
+                            }
+                            found
+                        }.getOrNull()
+                        if (busyNow == true) {
+                            sawBusy = true
+                            idlePolls = 0
+                        } else if (busyNow == false && sawBusy) {
+                            if (++idlePolls >= 2) {
+                                if (text.isNotBlank()) collected = text
+                                break
+                            }
+                        }
                     }
                     if (text.isNotBlank()) {
                         emptyPolls = 0
@@ -2242,6 +2279,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun listenOpenCodeEvents(root: String, password: String, sessionId: String, connectionRef: AtomicReference<HttpURLConnection?>, done: AtomicReference<CompletableDeferred<Unit>>? = null): Job = viewModelScope.launch(Dispatchers.IO) {
+        // Если поток событий оборвался, подключаемся заново, а не теряем сигнал «закончил».
+        var reconnects = 0
+        while (isActive && reconnects < 200) {
+            val ok = listenOpenCodeEventsOnce(root, password, sessionId, connectionRef, done)
+            if (!ok || !isActive) break
+            reconnects++
+            delay(1000)
+        }
+    }
+
+    /** Одно подключение к потоку событий. false — движок не отдаёт поток (не 2xx), переподключаться бессмысленно. */
+    private suspend fun listenOpenCodeEventsOnce(root: String, password: String, sessionId: String, connectionRef: AtomicReference<HttpURLConnection?>, done: AtomicReference<CompletableDeferred<Unit>>? = null): Boolean {
         val connection = (URL("$root/api/event").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10000
@@ -2258,9 +2307,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         formRoot = root
         formPassword = password
         activeEventConnection = connection
-        if (!isActive) { connection.disconnect(); return@launch }
+        if (!currentCoroutineContext().isActive) { connection.disconnect(); return false }
         try {
-            if (connection.responseCode !in 200..299) return@launch
+            if (connection.responseCode !in 200..299) return false
             val listenerJob = currentCoroutineContext()[Job]
             connection.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
                 var data = StringBuilder()
@@ -2488,6 +2537,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (activeEventConnection === connection) activeEventConnection = null
             connection.disconnect()
         }
+        return true
     }
 
     private fun callAnthropic(
